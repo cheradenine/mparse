@@ -1,290 +1,255 @@
 #ifndef __PARSER_H__
 #define __PARSER_H__
 
-#include <vector>
 #include <string>
-#include <functional>
 #include <optional>
-#include <variant>
-
-#include "convert.h"
-
-namespace cparse
+#include <functional>
+template <class T>
+struct ParseResult
 {
-    template <typename T>
-    using ParseResult = std::pair<std::optional<T>, std::string_view>;
-    template <typename T>
-    using Parser = std::function<ParseResult<T>(std::string_view)>;
+    std::optional<T> result;
+    std::string_view input;
 
-    using unit = std::monostate;
+    operator bool() const { return result.has_value(); }
+    bool operator!() const { return !result.has_value(); }
+    bool has_value() const { return result.has_value(); }
+    T &value() { return *result; }
+};
 
-    template <typename T, typename U>
-    std::optional<U> fmap(std::optional<T> value, std::function<U(T)> f)
-    {
-        if (value)
-        {
-            return f(*value);
-        }
-        else
-        {
-            return std::nullopt;
-        }
-    }
-
-    template<typename T, typename U>
-    Parser<U> bind(Parser<T> parser, std::function<Parser<U>(T)> f) {
-        return [=](std::string_view input) -> ParseResult<U> {
-            auto [result, remaining] = parser(input);
-            if (result) {
-                return f(*result)(remaining);
-            }
-            return {std::nullopt, input};
-        };
-    }
-
-    // Add return/pure operation
-    template<typename T>
-    Parser<T> pure(T value) {
-        return [=](std::string_view input) -> ParseResult<T> {
-            return {value, input};
-        };
-    }
-
-    template <typename T, typename U>
-    std::pair<T, U> combine(T t, U u)
-    {
-        return {t, u};
-    }
-
-    template<typename T>
-    T combine(T t, unit u) {
-        return t;
-    }
-
-    template<typename T>
-    T combine(unit u, T t) {
-        return t;
-    }
-
-    // only works when they are actually contiguous
-    std::string_view combine(std::string_view t, std::string_view u)
-    {
-        return std::string_view(t.data(), t.size() + u.size());
-    }
-
-    int combine(int d1, int d2)
-    {
-        return d1 * 10 + d2;
-    }
-
-    template <typename T>
-    struct sequence
-    {
-        void append(T t)
-        {
-            items.push_back(t);
-        }
-        std::vector<T> items;
-    };
-
-    template <>
-    struct sequence<std::string_view>
-    {
-        // WARNING: must be contiguous
-        void append(std::string_view s)
-        {
-            if (items.empty())
-            {
-                items = s;
-            }
-            else
-            {
-                items = std::string_view(items.data(), items.size() + s.size());
-            }
-        }
-        std::string_view items;
-    };
-
-    template <>
-    struct sequence<int>
-    {
-        void append(int d)
-        {
-            items = (items * 10) + d;
-        }
-        int items = 0;
-    };
-
-    template <typename T, typename U>
-    using combine_result_t = decltype(combine(std::declval<T>(), std::declval<U>()));
-
-    template <typename T, typename U>
-    Parser<U> fmap(Parser<T> p, std::function<U(T)> fn)
-    {
-        return [=](std::string_view input)
-        {
-            auto [res, rem] = p(input);
-            return std::make_pair(fmap(res, fn), rem);
-        };
-    }
-
-    Parser<char> char_range(char first, char last)
-    {
-        return [=](std::string_view input) -> ParseResult<char>
-        {
-            char ch = input.front();
-            if (ch >= first && ch <= last)
-            {
-                return {ch, input.substr(1)};
-            }
-            return {std::nullopt, input};
-        };
-    }
-
-    Parser<std::string_view> char_class(std::function<bool(char)> f)
-    {
-        return [=](std::string_view input) -> ParseResult<std::string_view>
-        {
-            char ch = input.front();
-            if (f(ch))
-            {
-                return {input.substr(0, 1), input.substr(1)};
-            }
-            return {std::nullopt, input};
-        };
-    }
-
-    Parser<int> digit()
-    {
-        return [](std::string_view input) -> ParseResult<int>
-        {
-            auto [result, remainder] = char_range('0', '9')(input);
-            if (result)
-            {
-                return {*result - '0', remainder};
-            }
-            return {std::nullopt, input};
-        };
-    }
-
-    Parser<std::string_view> letter()
-    {
-        return char_class([](char ch)
-                          { return std::isalpha(ch); });
-    }
-
-    Parser<unit> whitespace()
-    {
-        return [](std::string_view input)
-        {
-            size_t pos = 0;
-            while (pos < input.size() && std::isspace(input[pos]))
-            {
-                ++pos;
-            }
-            return std::make_pair(unit{}, input.substr(pos));
-        };
-    }
-
-    Parser<std::string_view> literal(char ch)
-    {
-        return [=](std::string_view input) -> ParseResult<std::string_view>
-        {
-            if (input.front() == ch)
-            {
-                return {input.substr(0,1), input.substr(1)};
-            }
-            return {std::nullopt, input};
-        };
-    }
-
-    Parser<char> any_char();
-    Parser<std::string_view> seq(const std::string &str);
-
-    template <typename T>
-    Parser<sequence<T>> some(Parser<T> p)
-    {
-        return [=](std::string_view input) -> ParseResult<sequence<T>>
-        {
-            sequence<T> results;
-            std::string_view inp = input;
-            int matched = 0;
-            while (!inp.empty())
-            {
-                auto [result, remainder] = p(inp);
-                if (!result.has_value())
-                {
-                    break;
-                }
-                results.append(result.value());
-                inp = remainder;
-            }
-            if (inp.data() != input.data())
-            {
-                return std::make_pair(results, inp);
-            }
-            else
-            {
-                return std::make_pair(std::nullopt, input);
-            }
-        };
-    }
-
-    template<typename T>
-    Parser<sequence<T>> count(int n, Parser<T> parser) {
-        return [=](std::string_view input) -> ParseResult<std::vector<T>> {
-            sequence<T> results;
-            std::string_view remaining = input;
-            
-            for (int i = 0; i < n; i++) {
-                auto [result, rem] = parser(remaining);
-                if (!result) {
-                    return {std::nullopt, input};
-                }
-                results.apppend(*result);
-                remaining = rem;
-            }
-            return {results, remaining};
-        };
-    }
-
-} // nemspace cparser
-
-template <typename T, typename U>
-cparse::Parser<cparse::combine_result_t<T, U>> operator>>(cparse::Parser<T> a, cparse::Parser<U> b)
-{
-    return [=](std::string_view input) -> cparse::ParseResult<cparse::combine_result_t<T, U>>
-    {
-        auto [resa, rema] = a(input);
-        if (resa.has_value())
-        {
-            auto [resb, remb] = b(rema);
-            if (resb.has_value())
-            {
-                auto combined = cparse::combine(resa.value(), resb.value());
-                return std::make_pair(combined, remb);
-                //                return std::make_pair(std::make_pair(resa.value(), resb.value()), remb);
-            }
-        }
-        return std::make_pair(std::nullopt, input);
+// Helper functions for constructing ParseResults
+template<typename T>
+ParseResult<T> parse_result(T value, std::string_view remaining) {
+    return ParseResult<T>{
+        .result = std::move(value),
+        .input = remaining
     };
 }
 
-template <typename T, typename U>
-cparse::Parser<std::variant<T, U>> operator|(cparse::Parser<T> a, cparse::Parser<U> b)
-{
-    return [=](std::string_view input)
-    {
-        auto [result, remainder] = a(input);
-        if (result)
-        {
-            return std::make_pair(result, remainder);
-        }
-        else
-        {
-            return b(input);
-        }
+template<typename T>
+ParseResult<T> empty_parse_result(std::string_view input) {
+    return ParseResult<T>{
+        .result = std::nullopt,
+        .input = input
     };
+}
+template <class T>
+class Parser
+{
+public:
+    using value_type = T;
+    using Parse = std::function<ParseResult<T>(std::string_view)>;
+
+    Parser(Parse parse) : parse_(parse) {}
+
+    ParseResult<T> operator()(std::string_view input) const
+    {
+        return parse_(input);
+    }
+
+    Parser<T> or_else(Parser<T> parser) const
+    {
+        Parse self = parse_;
+        return Parser<T>([self, parser](std::string_view input) {
+            auto result = self(input);
+            if (!result) {
+                return parser(input);
+            }
+            return result;
+        });
+    }
+
+    // fn is a function from T to a Parser<U>
+    template <typename F>
+    requires (!std::is_base_of_v<Parser<typename std::invoke_result_t<F, T>::value_type>, F>)
+    auto and_then(F&& fn) const
+    {
+        using ReturnParser = std::invoke_result_t<F, T>;
+        using U = typename ReturnParser::value_type; // Extract U from Parser<U>
+        Parser self = parse_;
+        return Parser<U>([self, fn](std::string_view input) {
+            auto result = self(input);
+            if (!result) {
+                return empty_parse_result<U>(input);
+            }
+            ReturnParser then_parser = fn(result.value());
+            return then_parser(result.input);
+        });
+    }
+
+    template<typename U>
+    auto and_then(const Parser<U>& next) const {
+        Parser self = parse_;
+        return Parser<U>([self, next](std::string_view input) {
+            auto result = self(input);
+            if (!result) {
+                return empty_parse_result<U>(input);
+            }
+            return next(result.input);
+        });
+    }
+
+    template<typename F>
+    auto transform(F&& fn) const {
+        using U = std::invoke_result_t<F, T>;
+        Parser self = parse_;
+        return Parser<U>([self, fn](std::string_view input) {
+            auto result = self(input);
+            if (!result) {
+                return empty_parse_result<U>(input);
+            }
+            return parse_result<U>(
+                fn(result.value()),
+                result.input);
+        });
+    }
+
+    template<typename U>
+    auto as(U value) const {
+        return transform([value](auto&&) -> U {
+            return value;
+        });
+    }
+
+private:
+    Parse parse_;
+};
+
+template<typename T>
+Parser<T> pure(T value) {
+    return Parser<T>([value](std::string_view input) {
+        return make_result(value, input);  // Succeeds with value, doesn't consume input
+    });
+}
+
+Parser<std::string_view> parse_literal(char ch)
+{
+    return Parser<std::string_view>([ch](std::string_view input) {
+        if (input.front() == ch) {
+            return parse_result(input.substr(0, 1),
+                input.substr(1));
+        } else {
+            return empty_parse_result<std::string_view>(input);
+        }
+    });
+}
+
+Parser<std::string_view> parse_range(char first, char last)
+{
+    return Parser<std::string_view>([first, last](std::string_view input) {
+        char ch = input.front();
+        if (ch >= first && ch <= last) {
+            return parse_result(input.substr(0, 1),
+                input.substr(1));
+        } else {
+            return empty_parse_result<std::string_view>(input);
+        }
+    });
+}
+
+Parser<std::string_view> parse_str(std::string_view str)
+{
+    return Parser<std::string_view>([str](std::string_view input) {
+        if (input.starts_with(str)) {
+            return parse_result(
+                input.substr(0, str.size()),
+                input.substr(str.size())
+            );
+        } else {
+            return empty_parse_result<std::string_view>(input);
+        } 
+    });
+}
+
+Parser<int> parse_digit(int first = 0, int last = 9)
+{
+    return Parser<int>([first, last](std::string_view input) {
+        char ch = input.front();
+        if (std::isdigit(ch)) {
+            int value  = ch - '0';
+            if (value >= first && value <= last) {
+                return parse_result(ch - '0', input.substr(1));
+            }
+        }
+        return empty_parse_result<int>(input);
+    });
+}
+
+template <typename T>
+Parser<std::vector<T>> parse_some(Parser<T> parser)
+{
+    return Parser<std::vector<T>>([parser](std::string_view input) {
+        std::vector<T> results;
+        while (!input.empty()) {
+            auto result = parser(input);
+            if (!result) {
+                //std::cerr << "did not parse " << input << std::endl;
+                break;
+            }
+            results.push_back(result.value());
+            input = result.input;
+        }
+        return parse_result(results, input);
+    });
+}
+
+template <typename T>
+Parser<std::vector<T>> parse_n(Parser<T> parser, int n)
+{
+    return Parser<std::vector<T>>([parser, n](std::string_view input) {
+        std::vector<T> results;
+        int required = n;
+        while (!input.empty() && required--) {
+            auto result = parser(input);
+            if (!result) {
+                //std::cerr << "did not parse " << input << std::endl;
+                break;
+            }
+            results.push_back(result.value());
+            input = result.input;
+        }
+        if (required > 0) {            // did not consume all input
+            return empty_parse_result<std::vector<T>>(input);
+        }
+        return parse_result(results, input);
+    });
+}
+
+Parser<std::string_view> parse_some(Parser<std::string_view> parser)
+{
+    return Parser<std::string_view>([parser](std::string_view input) {
+        size_t count = 0;
+        std::string_view inp = input;
+        while (!inp.empty()) {
+            auto result = parser(inp);
+            if (!result) {
+                break;
+            }
+            count += result.value().size();
+            inp = result.input;
+        }
+        return parse_result(input.substr(0, count), inp);
+    });
+}
+
+Parser<std::string_view> parse_n(Parser<std::string_view> parser, int n)
+{
+    return Parser<std::string_view>([parser, n](std::string_view input) {
+        size_t count = 0;
+        int required = n;
+        std::string_view inp = input;
+        while (!inp.empty() && required--) {
+            auto result = parser(inp);
+            if (!result) {
+                break;
+            }
+            count += result.value().size();
+            inp = result.input;
+        }
+        if (required > 0) {
+            return empty_parse_result<std::string_view>(inp);
+        }
+        return parse_result(input.substr(0, count), inp);
+    });
 }
 
 #endif // __PARSER_H__
