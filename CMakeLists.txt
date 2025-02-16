@@ -15,13 +15,13 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(googletest)
 
 # Add an executable target
-add_executable(mparse main.cpp)
+add_executable(mparse src/main.cpp)
 
 enable_testing()
 
 add_executable(
   mparse_test
-  mparse_test.cpp
+  src/test/mparse_test.cpp
 )
 
 target_link_libraries(

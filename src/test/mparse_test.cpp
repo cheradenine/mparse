@@ -1,7 +1,7 @@
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
 
-#include "parser.h"
+#include "../parser.h"
 
 #define EXPECT_STRV_EQ(s1, s2) \
     do { std::string s1s(s1); std::string s2s(s2); EXPECT_STREQ(s1s.c_str(), s2s.c_str()); } while(0)
