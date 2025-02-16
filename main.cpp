@@ -1,6 +1,8 @@
 #include <iostream>
 #include <iomanip>
 #include <string>
+#include <sstream>
+#include <fstream>
 #include <vector>
 #include <variant>
 #include <cstdarg>
@@ -9,12 +11,10 @@
 #include <system_error>
 
 #include "parser.h"
-#include "lexer.h"
 
 // A parser for things
 // is a function from strings
 // to lists of pairs of strings and things.
-// using Parser = std::function
 
 void dump_result(const std::vector<int> &res)
 {
@@ -30,16 +30,36 @@ void dump_result(const std::vector<int> &res)
     std::cout << "]";
 }
 
-int combine_digits(std::vector<int> digits)
-{
-    int value = 0;
-    for (auto d : digits)
-    {
-        value = value * 10 + d;
-    }
-    return value;
+Parser<int> parse_number() {
+    auto positive_number = parse_digit(1, 9).and_then([] (int val) {
+        return parse_some(parse_digit()).transform([val] (std::vector<int> digits) {
+            int result = val;
+            for (auto d : digits) {
+                result = (result * 10) + d;
+            }
+            return result;
+        });
+    }).or_else(parse_digit(0, 0));
+
+    return parse_literal('-')
+        .and_then(positive_number)
+        .transform([](int val) { return -val; })
+        .or_else(positive_number);
 }
 
+/*
+
+expr ::= term + expr | term
+term ::= factor * term | factor
+factor ::= (expr) | int
+
+*/
+
+void ParseExpression(std::string_view input) {
+ // 1 + 2 * 8
+
+
+}
 struct Dimension
 {
     int value;
@@ -50,41 +70,36 @@ struct Dimension
     } units;
 };
 
-void ParseNumber(std::string_view input) {
-    auto positive_number = parse_digit(1, 9).and_then([] (int val) {
-        return parse_some(parse_digit()).transform([val] (std::vector<int> digits) {
-            int result = val;
-            for (auto d : digits) {
-                result = (result * 10) + d;
-            }
-            return result;
-        });
-    });
-
-    auto number = parse_literal('-')
-        .and_then(positive_number)
-        .transform([](int val) { return -val; })
-        .or_else(positive_number);
-
-    auto result = positive_number(input);
-    if (result) {
-        std::cout << result.value() << std::endl;
-    }
-
-    result = number(input);
-    if (result) {
-        std::cout << result.value() << std::endl;
-    }
+std::ostream& operator <<(std::ostream& out, Dimension& dim) {
+    out << dim.value << (dim.units == Dimension::px ? "px" : "pct");
+    return out;
 }
 
-void ParseDimension(std::string_view input)
+struct Color {
+    int r;
+    int g;
+    int b;
+};
+
+std::ostream& operator <<(std::ostream& out, Color& c) {
+    out << "rgb(" << c.r << "," << c.g << "," << c.b << ")";
+    return out;
+}
+
+struct Rule {
+    std::string property;
+    std::variant<int, std::string, Dimension, Color> value;
+};
+
+struct StyleSheet {
+    std::unordered_map<std::string, std::vector<Rule>> selectors;
+};
+
+
+Parser<Dimension> parse_dimension()
 {
-    auto digits = parse_some(parse_digit());
-
-    auto parse_dimension = digits.and_then([=](auto values) {
+    auto dimension_parser = parse_number().and_then([=](auto value) {
         Dimension dim;
-        auto value = combine_digits(values);
-
         return parse_str("px").as(Dimension {
                 .value = value,
                 .units = Dimension::px
@@ -93,24 +108,164 @@ void ParseDimension(std::string_view input)
                 .units = Dimension::pct
         })); 
     });
+    return dimension_parser;
+}
 
-    auto result = parse_dimension(input);
-    if (result)
-    {
-        Dimension dim = result.value();
-        std::cout << dim.value << " "
-                  << (dim.units == Dimension::px ? "pixels" : "percent")
-                  << std::endl;
+uint8_t DecodeHex(std::string_view str) {
+    char buf[3] = {str[0], str[1], '\0'};
+    return (uint8_t)(std::strtoul(buf, nullptr, 16));
+}
+
+int CombineDigits(const std::vector<int> digits) {
+    int val = 0;
+    for (auto d : digits) {
+        val = (val * 10) + d;
+    }
+    return val;
+}
+
+auto is_hexit = [](char ch) {
+    ch = toupper(ch);
+    return (ch >= '0' || ch <= '9') || (ch >= 'A' || ch <= 'F');
+};
+
+auto parse_hex_digit = detail::parse_char_class(is_hexit);
+
+Parser<uint8_t> parse_byte() {
+
+    auto parser =
+        parse_str("0x").or_else(parse_str("0X"))
+        .and_then([](auto _) {
+            return parse_n(parse_hex_digit, 2).transform(DecodeHex);
+        })
+        .or_else(parse_n(parse_digit(), 1, 3).transform([](const std::vector<int>& digits) {
+            // TODO: leading 0 is illegal
+            return static_cast<uint8_t>(CombineDigits(digits));
+        }));
+
+    return parser;
+}
+
+Parser<Color> parse_color()
+{
+    auto is_hexit = [](char ch) {
+        ch = toupper(ch);
+        return (ch >= '0' || ch <= '9') || (ch >= 'A' || ch <= 'F');
+    };
+
+    auto parse_hex_digit(detail::parse_char_class(is_hexit));
+
+    auto hex_color_parser = 
+        parse_literal('#')
+        .and_then(parse_n(parse_hex_digit, 6))
+        .transform([](std::string_view value) {
+            Color color;
+            color.r = DecodeHex(value.substr(0, 2));
+            color.g = DecodeHex(value.substr(2, 4));
+            color.b = DecodeHex(value.substr(4, 6));
+            return color;
+        });
+
+    auto rgb_color_parser = 
+        parse_str("rgb")
+        .skip(whitespace())
+        .skip(parse_literal('('))
+        .skip(whitespace())
+        .and_then(parse_byte())
+        .skip(whitespace())
+        .skip(parse_literal(','))
+        .skip(whitespace())
+        .and_then([] (uint8_t r) {
+            return parse_byte()
+                .and_then([r](uint8_t g) {
+                    return parse_byte();
+                });
+        });
+
+
+    return hex_color_parser;
+}
+
+Parser<Rule> parse_dimension_rule(std::string_view property) {
+    return parse_dimension().transform([property](const Dimension& dim) {
+        return Rule {
+            .property = std::string(property),
+            .value = dim
+        };
+    });
+}
+
+Parser<Rule> parse_color_rule(std::string_view property) {
+    return parse_color().transform([property](const Color& color) {
+        return Rule {
+            .property = std::string(property),
+            .value = color
+        };
+    });
+}
+
+void print_stylesheet(const StyleSheet& ss) {
+    for (auto it = ss.selectors.begin(); it != ss.selectors.end(); ++it) {
+        std::cout << it->first << ":" << std::endl;
+        for (auto rule : it->second) {
+            std::cout << "  " << rule.property << " = ";
+            std::visit([](auto&& arg){
+                std::cout << arg << std::endl;
+            }, rule.value);
+        }
+    }
+}
+
+void ParseStyleSheet(std::string_view input) {
+
+    auto variable = parse_sequence({
+        parse_literal('_').or_else(parse_alpha()),
+        parse_some(parse_alnum())
+    });
+
+    auto rule = variable
+        .skip(whitespace())
+        .skip(parse_literal(':'))
+        .skip(whitespace())
+        .and_then([](std::string_view prop_name) {
+            return parse_dimension_rule(prop_name)
+            .or_else(parse_color_rule(prop_name));
+        })
+        .skip(parse_literal(';'))
+        .skip(whitespace());
+
+    auto selector = variable
+        .skip(whitespace())
+        .skip(parse_literal('{'))
+        .skip(whitespace())
+        .and_then([rule](std::string_view sel_name) {
+            return parse_some(rule).transform([sel_name](const std::vector<Rule>& rules) {
+                return make_pair(sel_name, rules);
+            });
+        })
+        .skip(parse_literal('}'))
+        .skip(whitespace());
+
+    auto styles = parse_some(selector).transform([](auto selectors) {
+        StyleSheet ss;
+        for (auto [selector, rules] : selectors) {
+            ss.selectors[std::string(selector)] = rules;
+        }
+        return ss;
+    });
+
+    auto result = styles(input);
+    if (result) {
+        print_stylesheet(result.value());
+    } else {
+        std::cerr << "fail at " << result.input << std::endl;
     }
 }
 
 void TestParse(std::string_view input)
 {
     std::cout << "parsing " << input << std::endl;
-    ParseDimension(input);
-    return;
 
-    auto parser1 = parse_str("hi").or_else(parse_str("bye"));
     auto parse_as_or_bs = parse_some(parse_literal('a').or_else(parse_literal('b')));
 
     auto result = parse_as_or_bs(input);
@@ -122,106 +277,29 @@ void TestParse(std::string_view input)
     {
         std::cerr << "fail" << std::endl;
     }
-
-    auto positive_integer = parse_some(parse_digit());
-
-    auto expr = parse_literal('(').and_then([](auto _)
-                                            { return parse_some(parse_digit()); })
-                    .and_then([](auto digits) -> Parser<int>
-                              {
-        auto value = combine_digits(digits);
-        return parse_literal(')').transform([value](auto _) -> int {
-            return value;  // Return the number instead of the ')'
-        }); });
-
-    auto expr_result = expr(input);
-    if (expr_result)
-    {
-        std::cout << expr_result.value() << std::endl;
-    }
 }
 
-void TestLex(std::string_view input)
+std::string read_file(std::string_view filename)
 {
-    auto digit = match_char_class([](char ch)
-                                  { return std::isdigit(ch); });
-    auto alnum = match_char_class([](char ch)
-                                  { return std::isalnum(ch); });
-    auto alpha = match_char_class([](char ch)
-                                  { return std::isalpha(ch); });
+  std::ifstream f(filename, 0);
+  if (!f) {
+    throw std::runtime_error( "failed to open file" );
+  }
 
-    auto ws = lex_some(match_char_class([](char ch)
-                                        { return std::isblank(ch); }));
-    // positive only
-    auto _1digit = lex_n(digit, 1);
-    auto _digits = lex_some(digit);
-
-    // 100px or
-    // 100%
-
-    auto integer = lex_seq({lex(digit), lex_some(digit)});
-
-    auto percent = lex_char('%');
-    auto semicolon = lex_char(';');
-    auto px = lex_word("px");
-
-    auto dim = lex_seq({integer,
-                        px.or_else(percent),
-                        ws,
-                        semicolon});
-
-    auto lex = dim; // .or_else(lex_some(alpha));
-    auto res = lex(input);
-
-    if (!res.has_value())
-    {
-        std::cerr << "fail: " << res.input << std::endl;
-    }
-    else
-    {
-        std::cout << res.value() << std::endl;
-    }
+  std::ostringstream ss;
+  ss << f.rdbuf();
+  return ss.str();
 }
 
 int main(int argc, char **argv)
 {
     if (argc != 2)
     {
-        std::cerr << "enter a string" << std::endl;
+        std::cerr << "enter a filename" << std::endl;
         return -1;
     }
-    ParseNumber(argv[1]);
-//    TestParse(argv[1]);
-    //    TestLex(argv[1]);
+
+    std::string content = read_file(argv[1]);
+
+    ParseStyleSheet(content);
 }
-
-#if 0
-void TestParse(std::string_view input)
-{
-    auto digits = cparse::some(cparse::digit());
-    auto letters = cparse::some(cparse::letter());
-    auto ws = cparse::whitespace();
-
-    auto integer = cparse::fmap(
-        std::function<int(std::vector<int>)>(combine_digits),
-        digits);
-
-    auto alnum = cparse::char_class([](char ch)
-                                    { return std::isalnum(ch); });
-
-    auto variable = cparse::letter() >> cparse::some(alnum);
-
-    {
-        auto parser = variable >> ws >> integer;
-
-        auto [result, remaining] = parser(input);
-        if (!result)
-        {
-            std::cerr << "fail: " << remaining << std::endl;
-            return;
-        }
-        auto val = *result;
-        std::cout << std::get<0>(val) << ',' << std::get<1>(val) << std::endl;
-    }
-}
-#endif
