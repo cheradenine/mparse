@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.22)  # Specify minimum CMake version
 cmake_policy(SET CMP0135 NEW)
 
-project(cparse)  # Set the project name
+project(mparse)  # Set the project name
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -15,20 +15,20 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(googletest)
 
 # Add an executable target
-add_executable(cparser main.cpp)
+add_executable(mparse main.cpp)
 
 enable_testing()
 
 add_executable(
-  parser_test
-  parser_test.cpp
+  mparse_test
+  mparse_test.cpp
 )
 
 target_link_libraries(
-  parser_test
+  mparse_test
   GTest::gtest_main
   GTest::gmock_main
 )
 
 include(GoogleTest)
-gtest_discover_tests(parser_test)
+gtest_discover_tests(mparse_test)

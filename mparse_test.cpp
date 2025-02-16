@@ -5,6 +5,25 @@
 
 #define EXPECT_STRV_EQ(s1, s2) \
     do { std::string s1s(s1); std::string s2s(s2); EXPECT_STREQ(s1s.c_str(), s2s.c_str()); } while(0)
+
+namespace parsers {
+    auto hexit = parse_range('A', 'F')
+            .transform([](auto sv) { return static_cast<int>(10 + (sv.front() - 'A')); })
+            .or_else(
+                parse_range('a', 'f')
+                .transform([](auto sv) { return static_cast<int>(10 + (sv.front() - 'a')); }))
+            .or_else(
+                parse_range('0', '9')
+                .transform([](auto sv) { return static_cast<int>(sv.front() - '0'); }));
+
+    auto hexbyte = parse_n(hexit, 1, 2).transform([] (auto hexs) {
+        int val = 0;
+        for (auto h : hexs) {
+            val = (val << 4) + h;
+        }
+        return val;
+    });    
+}
 // Demonstrate some basic assertions.
 TEST(ParserTest, ParseStringTest) {
   auto parser = parse_str("hello");
@@ -16,9 +35,57 @@ TEST(ParserTest, ParseStringTest) {
   EXPECT_STRV_EQ(result.value(), "hello");
 }
 
+TEST(ParserText, ParseHelloWorld) {
+
+    auto parser = parse_str("hello")
+        .skip(whitespace())
+        .and_then(parse_str(","))
+        .skip(whitespace())
+        .and_then(parse_str("world"));
+
+    auto result = parser("hello, world");
+    assert(result.value() == "world");
+
+    EXPECT_THAT(result.value(), ::testing::Eq("world"));
+}
+
 TEST(ParserTest, ContainsStr) {
     EXPECT_TRUE(detail::str_contains("hello", 'h'));
     EXPECT_FALSE(detail::str_contains("hello", 'x'));
+}
+
+TEST(ParserTest, HexNumbers) {
+    auto lowercase = {"a", "b", "c", "d", "e", "f" };
+    int expected = 10;
+    for (auto input : lowercase) {
+        EXPECT_EQ(parsers::hexit(input).value(), expected);
+        ++expected;
+    }
+
+    auto uppercase = {"A", "B", "C", "D", "E", "F" };
+    expected = 10;
+    for (auto input : uppercase) {
+        EXPECT_EQ(parsers::hexit(input).value(), expected);
+        ++expected;
+    }
+
+    auto digits = {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9"};
+    expected = 0;
+    for (auto input : digits) {
+        EXPECT_EQ(parsers::hexit(input).value(), expected);
+        ++expected;
+    }
+
+    EXPECT_FALSE(parsers::hexit("q"));
+    EXPECT_FALSE(parsers::hexit("R"));
+
+    EXPECT_EQ(parsers::hexbyte("0F").value(), 0x0F);
+    EXPECT_EQ(parsers::hexbyte("AA").value(), 0xAA);
+    EXPECT_EQ(parsers::hexbyte("7F").value(), 0x7F);
+    EXPECT_EQ(parsers::hexbyte("80").value(), 0x80);
+
+    EXPECT_FALSE(parsers::hexbyte("G7"));
+    EXPECT_FALSE(parsers::hexbyte("-1"));
 }
 
 TEST(ParserTest, ParseNumber) {
@@ -112,26 +179,17 @@ TEST(ParserTest, AndNot) {
 }
 
 TEST(ParserTest, RGB) {
-    auto token_parser = parse_n(parse_digit(), 1, 3).transform([](const std::vector<int>& vals)
-    {
-        int val = 0;
-        for (auto v : vals) {
-            val = (val * 10) + v;
-        }
-        return val;
-    });
-
+    auto hex = parse_str("0x").and_then(parsers::hexbyte);
     auto delimiter = parse_any_of(", ");
-
     auto parser = parse_str("rgb")
         .skip(whitespace())
         .and_then(parse_literal('('))
         .and_then(
-            parse_delimited_by(token_parser, parse_any_of(", "), parse_literal(')')))
+            parse_delimited_by(hex, delimiter, parse_literal(')')))
         .skip(parse_literal(')'));
 
-    auto result = parser("rgb(12, 240, 45)");
+    auto result = parser("rgb(0xFF, 0xA0, 0x45)");
     EXPECT_TRUE(result);
     EXPECT_EQ(result.value().size(), 3);
-    EXPECT_THAT(result.value(), ::testing::ElementsAre(12, 240, 45));
+    EXPECT_THAT(result.value(), ::testing::ElementsAre(0xFF, 0xA0, 0x45));
 }
