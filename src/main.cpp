@@ -47,19 +47,7 @@ Parser<int> parse_number() {
         .or_else(positive_number);
 }
 
-/*
-
-expr ::= term + expr | term
-term ::= factor * term | factor
-factor ::= (expr) | int
-
-*/
-
-void ParseExpression(std::string_view input) {
- // 1 + 2 * 8
-
-
-}
+// For style sheet - esque sample.
 struct Dimension
 {
     int value;
@@ -74,7 +62,6 @@ std::ostream& operator <<(std::ostream& out, Dimension& dim) {
     out << dim.value << (dim.units == Dimension::px ? "px" : "pct");
     return out;
 }
-
 struct Color {
     int r;
     int g;
@@ -85,16 +72,13 @@ std::ostream& operator <<(std::ostream& out, Color& c) {
     out << "rgb(" << c.r << "," << c.g << "," << c.b << ")";
     return out;
 }
-
 struct Rule {
     std::string property;
     std::variant<int, std::string, Dimension, Color> value;
 };
-
 struct StyleSheet {
     std::unordered_map<std::string, std::vector<Rule>> selectors;
 };
-
 
 Parser<Dimension> parse_dimension()
 {
@@ -111,12 +95,12 @@ Parser<Dimension> parse_dimension()
     return dimension_parser;
 }
 
-uint8_t DecodeHex(std::string_view str) {
+int decode_hex_str(std::string_view str) {
     char buf[3] = {str[0], str[1], '\0'};
     return (uint8_t)(std::strtoul(buf, nullptr, 16));
 }
 
-int CombineDigits(const std::vector<int> digits) {
+int combine_digits(const std::vector<int> digits) {
     int val = 0;
     for (auto d : digits) {
         val = (val * 10) + d;
@@ -124,26 +108,17 @@ int CombineDigits(const std::vector<int> digits) {
     return val;
 }
 
-auto is_hexit = [](char ch) {
+auto parse_hex_digit = detail::parse_char_class([](char ch) {
     ch = toupper(ch);
     return (ch >= '0' || ch <= '9') || (ch >= 'A' || ch <= 'F');
-};
-
-auto parse_hex_digit = detail::parse_char_class(is_hexit);
+});
 
 Parser<uint8_t> parse_byte() {
-
     auto parser =
         parse_str("0x").or_else(parse_str("0X"))
-        .and_then([](auto _) {
-            return parse_n(parse_hex_digit, 2).transform(DecodeHex);
-        })
-        .or_else(parse_n(parse_digit(), 1, 3).transform([](const std::vector<int>& digits) {
-            // TODO: leading 0 is illegal
-            return static_cast<uint8_t>(CombineDigits(digits));
-        }));
-
-    return parser;
+        .and_then(parse_n(parse_hex_digit, 2).transform(decode_hex_str))
+        .or_else(parse_n(parse_digit(), 1, 3).transform(combine_digits));
+    return parser.transform([](int val) {return static_cast<uint8_t>(val); });
 }
 
 Parser<Color> parse_color()
@@ -160,30 +135,28 @@ Parser<Color> parse_color()
         .and_then(parse_n(parse_hex_digit, 6))
         .transform([](std::string_view value) {
             Color color;
-            color.r = DecodeHex(value.substr(0, 2));
-            color.g = DecodeHex(value.substr(2, 4));
-            color.b = DecodeHex(value.substr(4, 6));
+            color.r = decode_hex_str(value.substr(0, 2));
+            color.g = decode_hex_str(value.substr(2, 4));
+            color.b = decode_hex_str(value.substr(4, 6));
             return color;
         });
 
-    auto rgb_color_parser = 
-        parse_str("rgb")
+    auto delimiter = parse_any_of(", ");
+    auto rgb_parser = parse_str("rgb")
         .skip(whitespace())
-        .skip(parse_literal('('))
-        .skip(whitespace())
-        .and_then(parse_byte())
-        .skip(whitespace())
-        .skip(parse_literal(','))
-        .skip(whitespace())
-        .and_then([] (uint8_t r) {
-            return parse_byte()
-                .and_then([r](uint8_t g) {
-                    return parse_byte();
-                });
+        .and_then(parse_literal('('))
+        .and_then(
+            parse_delimited_by(parse_byte(), delimiter, parse_literal(')')))
+        .skip(parse_literal(')'))
+        .transform([] (auto values) {
+            return Color{
+                .r = values[0],
+                .g = values[1],
+                .b = values[2]
+            };
         });
 
-
-    return hex_color_parser;
+    return hex_color_parser.or_else(rgb_parser);
 }
 
 Parser<Rule> parse_dimension_rule(std::string_view property) {
@@ -259,23 +232,6 @@ void ParseStyleSheet(std::string_view input) {
         print_stylesheet(result.value());
     } else {
         std::cerr << "fail at " << result.input << std::endl;
-    }
-}
-
-void TestParse(std::string_view input)
-{
-    std::cout << "parsing " << input << std::endl;
-
-    auto parse_as_or_bs = parse_some(parse_literal('a').or_else(parse_literal('b')));
-
-    auto result = parse_as_or_bs(input);
-    if (result)
-    {
-        std::cout << result.value() << std::endl;
-    }
-    else
-    {
-        std::cerr << "fail" << std::endl;
     }
 }
 
