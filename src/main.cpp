@@ -192,7 +192,7 @@ void print_stylesheet(const StyleSheet& ss) {
 void ParseStyleSheet(std::string_view input) {
 
     auto variable = parse_sequence({
-        parse_literal('_').or_else(parse_alpha()),
+        parse_any_of("_.#").or_else(parse_alpha()),
         parse_some(parse_alnum())
     });
 
@@ -201,6 +201,9 @@ void ParseStyleSheet(std::string_view input) {
         .skip(parse_literal(':'))
         .skip(whitespace())
         .and_then([](std::string_view prop_name) {
+            // TODO:
+            // This is where we will inject a function that takes a prop_name
+            // and retruns the apropriate parser.
             return parse_dimension_rule(prop_name)
             .or_else(parse_color_rule(prop_name));
         })
