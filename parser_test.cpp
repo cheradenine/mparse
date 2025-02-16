@@ -25,9 +25,6 @@ TEST(ParserTest, ParseNumber) {
     // These are complicated enough that they should probably go in the library
     auto positive_number = parse_digit(1, 9).and_then([] (int val) {
         return parse_some(parse_digit()).transform([val] (std::vector<int> digits) {
-            // if (digits.size() > 1 && digits[0] == 0) {
-            //     return std::nullopt;
-            // }
             int result = val;
             for (auto d : digits) {
                 result = (result * 10) + d;
@@ -36,20 +33,21 @@ TEST(ParserTest, ParseNumber) {
         });
     });
 
-    auto zero = parse_n(parse_digit(0, 0), 1, 1).as(0);
+    auto zero = parse_digit(0, 0).and_not(parse_digit(0, 9));
 
-    auto number = parse_literal('-')
-        .and_then(positive_number)
-        .transform([](int val) { return -val; })
-        .or_else(positive_number)
-        .or_else(zero);
+    auto integer = positive_number
+        .or_else(zero)
+        .or_else(
+            parse_literal('-')
+            .and_then(positive_number)
+            .transform([] (int val) { return -val; })
+        );
 
-    ASSERT_EQ(number("0").value(), 0);
-    ASSERT_EQ(number("123").value(), 123);
-    ASSERT_EQ(number("-123").value(), -123);
-
-    // verify that it did not consume all the input.
-    ASSERT_FALSE(number("01").input.empty());
+    EXPECT_EQ(integer("0").value(), 0);
+    EXPECT_EQ(integer("123").value(), 123);
+    EXPECT_EQ(integer("-123").value(), -123);
+    EXPECT_FALSE(integer("01"));
+    EXPECT_FALSE(integer("-0"));
 }
 
 TEST(ParserTest, DelimitedBy) {
@@ -101,18 +99,16 @@ TEST(ParserTest, ParseN) {
     EXPECT_EQ(result.input.front(), 'd');
 }
 
-TEST(ParserTest, Number) {
-    auto token_parser = parse_n(parse_digit(), 1, 3).transform([](const std::vector<int>& vals)
-    {
-        int val = 0;
-        for (auto v : vals) {
-            val = (val * 10) + v;
-        }
-        return val;
-    });
-    auto result = token_parser("123");
-    EXPECT_TRUE(result);
-    EXPECT_EQ(result.value(), 123);
+TEST(ParserTest, AndNot) {
+    auto parser = parse_n(
+        parse_range('a', 'z').and_not(parse_literal('x')), 4
+    );
+
+    auto result = parser("abyz");
+    ASSERT_TRUE(result);
+
+    result = parser("uvxy");
+    ASSERT_FALSE(result);
 }
 
 TEST(ParserTest, RGB) {

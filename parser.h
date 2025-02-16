@@ -94,6 +94,22 @@ public:
     }
 
     template<typename U>
+    Parser<T> and_not(const Parser<U>& next) const {
+        Parser self = parse_;
+        return Parser<T>([self, next](std::string_view input) {
+            auto result = self(input);
+            if (!result) {
+                return empty_parse_result<T>(input);
+            }
+            auto next_result = next(result.input);
+            if (next_result) {
+                return empty_parse_result<T>(input);
+            }
+            return result;
+        });
+    }
+
+    template<typename U>
     auto skip(const Parser<U>& next) const {
         Parser self = parse_;
         return Parser<T>([self, next](std::string_view input) {
