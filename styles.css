@@ -1,11 +1,12 @@
-something { 
-    height : 10px;
-    width : 200px;
-    color : #004488;
-}
-
 .otherthing {
     height : 20px;
     width :  201px;
     color : rgb(156, 39, 188);
+}
+
+.something {
+    height : 10px;
+    width : 200px;
+    color : #004488;
+    padding: 10px 20px;
 }
