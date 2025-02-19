@@ -11,12 +11,14 @@
 #include <system_error>
 
 #include "parser.h"
+#include "style_sheet.h"
 
 // A parser for things
 // is a function from strings
 // to lists of pairs of strings and things.
 
-void dump_result(const std::vector<int> &res)
+template<typename T>
+void dump_result(const std::vector<T> &res)
 {
     std::cout << "[";
     for (auto it = res.begin(); it != res.end(); ++it)
@@ -39,60 +41,66 @@ Parser<int> parse_number() {
             }
             return result;
         });
-    }).or_else(parse_digit(0, 0));
+    });
 
-    return parse_literal('-')
-        .and_then(positive_number)
-        .transform([](int val) { return -val; })
-        .or_else(positive_number);
+    auto zero = parse_digit(0, 0).and_not(parse_digit(0, 9));
+
+    return positive_number
+        .or_else(zero)
+        .or_else(
+            parse_literal('-')
+            .and_then(positive_number)
+            .transform([] (int val) { return -val; })
+        );
 }
 
 // For style sheet - esque sample.
-struct Dimension
-{
-    int value;
-    enum
-    {
-        pct,
-        px,
-    } units;
-};
-
-std::ostream& operator <<(std::ostream& out, Dimension& dim) {
-    out << dim.value << (dim.units == Dimension::px ? "px" : "pct");
-    return out;
-}
-struct Color {
-    int r;
-    int g;
-    int b;
-};
-
-std::ostream& operator <<(std::ostream& out, Color& c) {
-    out << "rgb(" << c.r << "," << c.g << "," << c.b << ")";
-    return out;
-}
-struct Rule {
-    std::string property;
-    std::variant<int, std::string, Dimension, Color> value;
-};
-struct StyleSheet {
-    std::unordered_map<std::string, std::vector<Rule>> selectors;
-};
 
 Parser<Dimension> parse_dimension()
 {
-    auto dimension_parser = parse_number().and_then([=](auto value) {
-        Dimension dim;
+    auto dimension_parser = parse_number().and_then([](auto value) {
         return parse_str("px").as(Dimension {
                 .value = value,
                 .units = Dimension::px
         }).or_else(parse_literal('%').as(Dimension {
                 .value = value,
                 .units = Dimension::pct
-        })); 
+        }));
     });
     return dimension_parser;
+}
+
+Parser<Spacing> parse_spacing()
+{
+    auto spacing =
+        parse_delimited_by(parse_dimension(), parse_ws(true), parse_literal(';'))
+        .transform([] (const std::vector<Dimension>& values) -> Spacing {
+            Spacing sp;
+            dump_result(values);
+            std::cout << std::endl;
+            switch (values.size()) {
+                case 1:
+                    sp.top = sp.right = sp.bottom = sp.left = values[0];
+                    return sp;
+                case 2:
+                    sp.top = sp.bottom = values[0];
+                    sp.right = sp.left = values[1];
+                    return sp;
+                case 3:
+                    sp.top = values[0];
+                    sp.left = sp.right  = values[1];
+                    sp.bottom = values[2];
+                    return sp;
+                case 4:
+                    sp.top = values[0];
+                    sp.right = values[1];
+                    sp.bottom = values[2];
+                    sp.left = values[3];
+                    return sp;
+            }
+            return sp;
+        });
+    return spacing;
 }
 
 int decode_hex_str(std::string_view str) {
@@ -141,9 +149,9 @@ Parser<Color> parse_color()
             return color;
         });
 
-    auto delimiter = parse_any_of(", ");
+    auto delimiter = parse_ignoring_ws(parse_literal(','));
     auto rgb_parser = parse_str("rgb")
-        .skip(whitespace())
+        .skip(parse_ws())
         .and_then(parse_literal('('))
         .and_then(
             parse_delimited_by(parse_byte(), delimiter, parse_literal(')')))
@@ -157,6 +165,16 @@ Parser<Color> parse_color()
         });
 
     return hex_color_parser.or_else(rgb_parser);
+}
+
+template<typename T>
+Parser<Rule> parse_rule(std::string_view property, Parser<T> rule_value) {
+    return rule_value().transform([property](const T& value) {
+        return Rule {
+            .property = std::string(property),
+            .value = value
+        };
+    });
 }
 
 Parser<Rule> parse_dimension_rule(std::string_view property) {
@@ -173,6 +191,16 @@ Parser<Rule> parse_color_rule(std::string_view property) {
         return Rule {
             .property = std::string(property),
             .value = color
+        };
+    });
+}
+
+Parser<Rule> parse_spacing_rule(std::string_view property) {
+    return parse_spacing().transform([property](const Spacing& spacing) {
+        std::cout << "spacing = " << spacing << std::endl;
+        return Rule {
+            .property = std::string(property),
+            .value = spacing
         };
     });
 }
@@ -197,30 +225,32 @@ void ParseStyleSheet(std::string_view input) {
     });
 
     auto rule = variable
-        .skip(whitespace())
+        .skip(parse_ws())
         .skip(parse_literal(':'))
-        .skip(whitespace())
+        .skip(parse_ws())
         .and_then([](std::string_view prop_name) {
             // TODO:
             // This is where we will inject a function that takes a prop_name
             // and retruns the apropriate parser.
             return parse_dimension_rule(prop_name)
+//            .or_else(parse_spacing_rule(prop_name))
             .or_else(parse_color_rule(prop_name));
         })
         .skip(parse_literal(';'))
-        .skip(whitespace());
+        .skip(parse_ws());
 
     auto selector = variable
-        .skip(whitespace())
+        .skip(parse_ws())
         .skip(parse_literal('{'))
-        .skip(whitespace())
+        .skip(parse_ws())
         .and_then([rule](std::string_view sel_name) {
             return parse_some(rule).transform([sel_name](const std::vector<Rule>& rules) {
                 return make_pair(sel_name, rules);
             });
         })
+        .skip(parse_ws())
         .skip(parse_literal('}'))
-        .skip(whitespace());
+        .skip(parse_ws());
 
     auto styles = parse_some(selector).transform([](auto selectors) {
         StyleSheet ss;
@@ -232,6 +262,9 @@ void ParseStyleSheet(std::string_view input) {
 
     auto result = styles(input);
     if (result) {
+        if (result.error.size()) {
+            std::cerr << "It says it worked but: " << result.error << std::endl;
+        }
         print_stylesheet(result.value());
     } else {
         std::cerr << "fail at " << result.input << std::endl;

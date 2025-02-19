@@ -3,7 +3,7 @@
 ## Introduction
 
 This is a tiny library I wrote for fun after being tasked with writing a css parser (for a very small subset of css). I initially implemented that as a recursive decent parser but remembered back
-to some cool stuff I learned about with Haskell and Monadic parsing. And since I'm working in C++ for 
+to some cool stuff I learned about with Haskell and Monadic parsing. And since I'm working in C++ for
 part of my work project I figured I'd try to write my own little monadic parser combinator toolkit in C++ 23.
 
 ## How does this thing work?
@@ -15,9 +15,9 @@ along the way.
     // A simple example.
 
     auto parser = parse_str("hello")
-        .skip(whitespace())
+        .skip(parse_ws())
         .and_then(parse_literal(','))
-        .skip(whitespace())
+        .skip(parse_ws())
         .and_then(parse_str("world"));
 
     auto result = parser("hello, world");
@@ -32,6 +32,7 @@ along the way.
 ```
 
 ## Status
+
 This is very early experimental code. There no error reporting. There may be bugs. There aren't enough tests.
 
 More combinators may be useful, like `parse_until` or `skip_until` for comments. It is not

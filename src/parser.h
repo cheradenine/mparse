@@ -1,18 +1,26 @@
 #ifndef __PARSER_H__
 #define __PARSER_H__
 
+#include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
-#include <optional>
-#include <functional>
 #include <vector>
+#include <iostream>
+
+#include <fmt/format.h>
 
 using unit = std::monostate;
+
+template<class T>
+class Parser;
 template <class T>
 struct ParseResult
 {
+    // Maybe result should be std::expect?
     std::optional<T> result;
     std::string_view input;
+    std::string error;
 
     operator bool() const { return result.has_value(); }
     bool operator!() const { return !result.has_value(); }
@@ -31,12 +39,83 @@ ParseResult<T> make_parse_result(T value, std::string_view remaining) {
 }
 
 template<typename T>
-ParseResult<T> empty_parse_result(std::string_view input) {
+ParseResult<T> empty_parse_result(std::string_view input, const std::string& error) {
     return ParseResult<T>{
         .result = std::nullopt,
-        .input = input
+        .input = input,
+        .error = error
     };
 }
+
+namespace detail {
+    template<typename T>
+    struct parser_impl {
+        template<typename U>
+        static auto skip(const Parser<T>& parser, const Parser<U>& next) {
+            return Parser<T>([parser, next](std::string_view input) {
+                auto result = parser(input);
+                if (!result) {
+                    return empty_parse_result<T>(input, result.error);
+                }
+                auto next_result = next(result.input);
+                if (!next_result) {
+                    return empty_parse_result<T>(result.input, next_result.error);
+                }
+                return make_parse_result(
+                    result.value(),
+                    next_result.input
+                );
+            });
+        }
+    };
+
+    struct discontinuous_tag {};
+    struct discontinuous_string_view : std::string_view, discontinuous_tag {
+        discontinuous_string_view(const std::string_view& other) 
+            : std::string_view(other) {}
+        discontinuous_string_view& operator=(const std::string_view& other) {
+            std::string_view::operator=(other);
+            return *this;
+        }        
+    };
+
+    template<typename T>
+    using result_vector_t = std::conditional_t<
+        std::is_same_v<T, std::string_view>,
+        std::vector<discontinuous_string_view>,
+        std::vector<T>
+    >;
+
+
+    template<class T>
+    std::ostream& operator<<(std::ostream& out, const std::vector<T>& xs) {
+        out << "[";
+        for (auto it = xs.begin(); it != xs.end(); ++it) {
+            out << *it;
+            if (it + 1 != xs.end()) {
+                out << ",";
+            }
+        }
+        out << "]";
+        return out;
+    }
+
+    std::ostream& operator<<(std::ostream& out, const unit _) {
+        out << "unit";
+        return out;
+    }
+
+    template<class T>
+    std::ostream& operator<<(std::ostream& out, const ParseResult<T>& res) {
+        if (res) {
+            out << res.value();
+        } else {
+            out << res.error;
+        }
+        return out;
+    }
+}
+
 template <class T>
 class Parser
 {
@@ -74,7 +153,7 @@ public:
         return Parser<U>([self, fn](std::string_view input) {
             auto result = self(input);
             if (!result) {
-                return empty_parse_result<U>(input);
+                return empty_parse_result<U>(input, result.error);
             }
             ReturnParser then_parser = fn(result.value());
             return then_parser(result.input);
@@ -87,7 +166,7 @@ public:
         return Parser<U>([self, next](std::string_view input) {
             auto result = self(input);
             if (!result) {
-                return empty_parse_result<U>(input);
+                return empty_parse_result<U>(input, result.error);
             }
             return next(result.input);
         });
@@ -99,11 +178,14 @@ public:
         return Parser<T>([self, next](std::string_view input) {
             auto result = self(input);
             if (!result) {
-                return empty_parse_result<T>(input);
+                return empty_parse_result<T>(input, result.error);
             }
             auto next_result = next(result.input);
             if (next_result) {
-                return empty_parse_result<T>(input);
+                return empty_parse_result<T>(
+                    input,
+                    fmt::format("Expected failure but parsed {}", next_result.value())
+                );
             }
             return result;
         });
@@ -111,22 +193,8 @@ public:
 
     template<typename U>
     auto skip(const Parser<U>& next) const {
-        Parser self = parse_;
-        return Parser<T>([self, next](std::string_view input) {
-            auto result = self(input);
-            if (!result) {
-                return empty_parse_result<T>(input);
-            }
-            auto next_result = next(result.input);
-            if (!next_result) {
-                return empty_parse_result<T>(result.input);
-            }
-            return make_parse_result(
-                result.value(),
-                next_result.input
-            );
-        });
-    }
+        return detail::parser_impl<T>::skip(*this, next);
+    }    
 
     template<typename F>
     auto transform(F&& fn) const {
@@ -135,7 +203,7 @@ public:
         return Parser<U>([self, fn](std::string_view input) {
             auto result = self(input);
             if (!result) {
-                return empty_parse_result<U>(input);
+                return empty_parse_result<U>(input, result.error);
             }
             return make_parse_result<U>(
                 fn(result.value()),
@@ -156,10 +224,31 @@ private:
 
 using StringParser = Parser<std::string_view>;
 
+namespace detail {
+template<>
+struct parser_impl<std::string_view> {
+    // When skipping over input the result becomes discontinuous
+    template<typename U>
+    static auto skip(const StringParser& parser, const Parser<U>& next) {
+        Parser<detail::discontinuous_string_view> to_dc = parser.transform([](auto value) {
+            return detail::discontinuous_string_view(value);
+        });
+        return to_dc.skip(next);
+    }
+};
+
+Parser<detail::discontinuous_string_view> to_discontinuous(StringParser parser) {
+    return parser.transform([](auto value) {
+        return detail::discontinuous_string_view(value);
+    });
+}
+
+}
+
 template<typename T>
 Parser<T> parse_never() {
     return Parser<T>([](std::string_view input) {
-        return empty_parse_result<T>(input);
+        return empty_parse_result<T>(input, "Error: never");
     });
 }
 
@@ -183,7 +272,10 @@ namespace detail {
                     );
                 }
             }
-            return empty_parse_result<std::string_view>(input);
+            return empty_parse_result<std::string_view>(
+                input,
+                fmt::format("Error: unexpected char {}", input.front())
+            );
         });
     }
     
@@ -204,7 +296,9 @@ StringParser parse_literal(char ch)
             return make_parse_result(input.substr(0, 1),
                 input.substr(1));
         } else {
-            return empty_parse_result<std::string_view>(input);
+            return empty_parse_result<std::string_view>(
+                input,
+                fmt::format("Expected {} but saw {}", ch, input.front()));
         }
     });
 }
@@ -219,7 +313,9 @@ StringParser parse_range(char first, char last)
                     input.substr(1));
             }
         }
-        return empty_parse_result<std::string_view>(input);
+        return empty_parse_result<std::string_view>(
+            input,
+            fmt::format("Error: expected [{}-{}] but saw {}", first, last, input.front()));
     });
 }
 
@@ -232,7 +328,10 @@ StringParser parse_str(std::string_view str)
                 input.substr(str.size())
             );
         } else {
-            return empty_parse_result<std::string_view>(input);
+            return empty_parse_result<std::string_view>(
+                input,
+                fmt::format("Error: expected {} but saw {}", str, input)
+            );
         } 
     });
 }
@@ -242,7 +341,9 @@ StringParser parse_any_of(std::string_view str)
 {
     return StringParser([str](std::string_view input){
         if (!detail::str_contains(str, input.front())) {
-            return empty_parse_result<std::string_view>(input);
+            return empty_parse_result<std::string_view>(
+                input,
+            fmt::format("Error: expected any of {} but saw {}", str, input.front()));
         }
         return make_parse_result(input.substr(0, 1), input.substr(1));
     });
@@ -260,7 +361,10 @@ Parser<int> parse_digit(int first = 0, int last = 9)
                 }
             }
         }
-        return empty_parse_result<int>(input);
+        return empty_parse_result<int>(
+            input,
+            fmt::format("Error: expected digit from [{} - {}] but saw {}", first, last, input.front())
+        );
     });
 }
 
@@ -272,7 +376,6 @@ Parser<std::vector<T>> parse_some(Parser<T> parser)
         while (!input.empty()) {
             auto result = parser(input);
             if (!result) {
-                //std::cerr << "did not parse " << input << std::endl;
                 break;
             }
             results.push_back(result.value());
@@ -290,9 +393,11 @@ Parser<std::vector<T>> parse_n(Parser<T> parser, int min, std::optional<int> max
         int count = 0;
         int count_max = max.value_or(min);
 
+        std::string error;
         while (!input.empty() && count < count_max) {
             auto result = parser(input);
             if (!result) {
+                error = result.error;
                 break;
             }
             results.push_back(result.value());
@@ -301,7 +406,12 @@ Parser<std::vector<T>> parse_n(Parser<T> parser, int min, std::optional<int> max
             ++count;
         }
         if (count < min) {
-            return empty_parse_result<std::vector<T>>(input);
+            return empty_parse_result<std::vector<T>>(
+                input,
+                fmt::format(
+                    "Error: expected to match {} times but saw {}\n\tInner: {}",
+                        min, count, error)
+            );
         }
         return make_parse_result(results, input);
     });
@@ -334,9 +444,11 @@ StringParser parse_n(StringParser parser, int min, std::optional<int> max = std:
         int count_max = max.value_or(min);
         size_t pos = 0;
         std::string_view inp = input;
+        std::string error;
         while (!inp.empty() && count < count_max) {
             auto result = parser(inp);
             if (!result) {
+                error = result.error;
                 break;
             }
             pos += result.value().size();
@@ -344,7 +456,13 @@ StringParser parse_n(StringParser parser, int min, std::optional<int> max = std:
             ++count;
         }
         if (count < min) {
-            return empty_parse_result<std::string_view>(inp);
+            return empty_parse_result<std::string_view>(
+                inp,
+                fmt::format(
+                    "Error: expected {} occurences but only saw {}\n\tInner: {}",
+                    min, count, error)
+
+            );
         }
         return make_parse_result(input.substr(0, pos), inp);
     });
@@ -357,7 +475,10 @@ StringParser parse_sequence(std::initializer_list<StringParser> parsers) {
         std::string_view inp = input;
         for (auto parser: ps) {
             if (input.empty()) {
-                return empty_parse_result<std::string_view>(inp);
+                return empty_parse_result<std::string_view>(
+                    inp,
+                    fmt::format("Error: reached end of input.")
+                );
             }
             auto result = parser(inp);
             if (!result) {
@@ -374,47 +495,37 @@ StringParser parse_sequence(std::initializer_list<StringParser> parsers) {
 }
 
 template<typename T, typename D, typename S>
-Parser<std::vector<T>> parse_delimited_by(
+Parser<detail::result_vector_t<T>> parse_delimited_by(
     Parser<T> parser,
     Parser<D> delimiter,
     Parser<S> terminator,
-//    std::string_view terminator,
     std::optional<int> max = std::nullopt
 ) {
-    return Parser<std::vector<T>>([=](std::string_view input) {
-        std::vector<T> results;
+    using ResultType = detail::result_vector_t<T>;
+    return Parser<ResultType>([=](std::string_view input) {
 
-//        auto parse_delim = parse_any_of(delimiter);
-        auto parse_term = terminator; //parse_any_of(terminator);
-        int times = 10;
+        auto tokens_result = parse_some(parser.skip(delimiter))(input);
 
-        while(!input.empty()) {
-            if (parse_term(input)) {
-                break;
-            }
-
-            bool valid = false;
-            auto item = parser(input);
-            if (item) {
-                results.emplace_back(std::move(item.value()));
-                input = item.input;
-                valid = true;
-            }
-            auto delim_result = delimiter(input);
-            if (delim_result) {
-                input = delim_result.input;
-                valid = true;
-            }
-
-            if (!valid) {
-                return empty_parse_result<std::vector<T>>(input);
-            }
-
-            if (--times == 0) {
-                break;
-            }
+        if (!tokens_result) {
+            return empty_parse_result<ResultType>(input, tokens_result.error);
         }
-        return make_parse_result(results, input);
+        input = tokens_result.input;
+
+        auto last_token_result = parser(input);
+
+        if (!last_token_result) {
+            return empty_parse_result<ResultType>(input, last_token_result.error);
+        }
+        // now expect the terminator
+        auto term_result = terminator(last_token_result.input);
+        if (!term_result) {
+            return empty_parse_result<ResultType>(term_result.input, term_result.error);
+        }
+
+        auto results = tokens_result.value();
+        results.push_back(last_token_result.value());
+
+        return make_parse_result(results, last_token_result.input);
     });
 }
 
@@ -426,13 +537,37 @@ StringParser parse_alnum() {
     return detail::parse_char_class([] (char ch) { return std::isalnum(ch); } );
 }
 
-Parser<unit> whitespace() {
-    return Parser<unit>([] (std::string_view input) {
+Parser<unit> parse_ws(bool optional = true) {
+    return Parser<unit>([optional] (std::string_view input) {
+        bool saw_ws = false;
         while (!input.empty() && (std::isblank(input.front()) || input.front() == '\n')) {
             input.remove_prefix(1);
+            saw_ws = true;
+        }
+        if (!optional && !saw_ws) {
+            return empty_parse_result<unit>(input, "Error: failed to parse whitespace");
         }
         return make_parse_result(unit{}, input);
     });
+}
+
+template<typename T, typename U>
+Parser<T> parse_ignoring(Parser<T> parser, Parser<U> ignore) {
+    return parser.skip(ignore).or_else(ignore.and_then(parser).skip(ignore));
+}
+
+template<typename U>
+Parser<detail::discontinuous_string_view> parse_ignoring(StringParser parser, Parser<U> ignore) {
+    return parse_ignoring(detail::to_discontinuous(parser), ignore);
+}
+
+template<typename T>
+Parser<T> parse_ignoring_ws(Parser<T> parser) {
+    return parse_ignoring(parser, parse_ws());
+}
+
+Parser<detail::discontinuous_string_view> parse_ignoring_ws(StringParser parser) {
+    return parse_ignoring(parser, parse_ws());
 }
 
 template <typename T>
