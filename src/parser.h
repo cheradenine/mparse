@@ -40,9 +40,6 @@ ParseResult<T> make_parse_result(T value, std::string_view remaining) {
 
 template<typename T>
 ParseResult<T> empty_parse_result(std::string_view input, const std::string& error) {
-    if (!error.empty()) {
-//        std::cerr << error << std::endl;
-    }
     return ParseResult<T>{
         .result = std::nullopt,
         .input = input,
@@ -506,18 +503,16 @@ Parser<detail::result_vector_t<T>> parse_delimited_by(
 ) {
     using ResultType = detail::result_vector_t<T>;
     return Parser<ResultType>([=](std::string_view input) {
-        std::cout << "-> delimited_by" << std::endl;
 
         auto tokens_result = parse_some(parser.skip(delimiter))(input);
-        detail::operator<<(std::cout, tokens_result) << std::endl;
+
         if (!tokens_result) {
             return empty_parse_result<ResultType>(input, tokens_result.error);
         }
         input = tokens_result.input;
-        std::cout << "  input now: " << input << std::endl;
-//        auto last_token = parser.skip(terminator)(input);
+
         auto last_token_result = parser(input);
-        detail::operator<<(std::cout, last_token_result) << std::endl;
+
         if (!last_token_result) {
             return empty_parse_result<ResultType>(input, last_token_result.error);
         }
@@ -526,9 +521,6 @@ Parser<detail::result_vector_t<T>> parse_delimited_by(
         if (!term_result) {
             return empty_parse_result<ResultType>(term_result.input, term_result.error);
         }
-        std::cout << "  input now: " << last_token_result.input << std::endl;
-
-        std::cout << "<- delimited_by" << std::endl;
 
         auto results = tokens_result.value();
         results.push_back(last_token_result.value());
