@@ -15,9 +15,9 @@ along the way.
     // A simple example.
 
     auto parser = parse_str("hello")
-        .skip(parse_ws())
+        .skip(parse_opt_ws())
         .and_then(parse_literal(','))
-        .skip(parse_ws())
+        .skip(parse_opt_ws())
         .and_then(parse_str("world"));
 
     auto result = parser("hello, world");
@@ -31,13 +31,27 @@ along the way.
 
 ```
 
+### Handling whitespace
+
+Sometimes you want to ignore whitespace and sometimes you don't. For example, in the
+stylesheet example we can ignore blank lines and spaces around delimiters like `'{'`, etc. but
+for some property values whitespace becomes an important delimiter like in padding.
+
+To deal with this the library has different ways to express parsing whitespace. Use
+
+`parse_ws()` - When failing to find whitespace would be a parse error
+
+`parse_opt_ws()` - When whitespace is optional.
+
+`parse_ignoring_ws()` - to wrap a parser with optional whitespace on either end of it.
+
 ## Status
 
-This is very early experimental code. There no error reporting. There may be bugs. There aren't enough tests.
+This is very early experimental code. There minimal error reporting. There may be bugs. There aren't enough tests. There will be breaking changes.
 
 More combinators may be useful, like `parse_until` or `skip_until` for comments. It is not
 hard to come up with more and build them out of the
 existing parsers.
 
-Input now is assumed to be in a single buffer and accessed via string_piece. It is a great abstraction for hadling parsing but I will have to extend this to
-handle buffering of larger input streams.
+Input now is assumed to be in a single buffer and accessed via string_view. It is a great abstraction for hadling parsing but input will likely need to be enhanced to handler large input streams.
+
