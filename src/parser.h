@@ -4,6 +4,7 @@
 #include <fmt/format.h>
 #include <functional>
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -509,17 +510,24 @@ Parser<detail::discontinuous_string_view> parse_ignoring_ws(
   return parse_ignoring(parser, parse_opt_ws());
 }
 
-template <typename T>
-Parser<T> recursive_parser(
-    std::function<Parser<T>(Parser<T> const&)> parser_builder) {
-  auto recursive_parser_ptr = std::make_shared<Parser<T>>(parse_never<T>());
+// this is unsafe - the referencing parser must
+// out live calls to this parser.
+template<typename T>
+Parser<T> parse_ref(const Parser<T>& parser) {
+    return Parser<T>([&] (std::string_view input) {
+        return parser(input);
+    });
+}
 
-  // Build the parser using the parser_builder lambda
-  Parser<T> full_parser = parser_builder(*recursive_parser_ptr);
+template<typename T>
+Parser<T> parse_recursive(std::function<Parser<T>(const Parser<T>&)> make_parser) {
+    auto parser_ptr = std::make_shared<Parser<T>>(parse_never<T>());
+    *parser_ptr = make_parser(*parser_ptr);
 
-  *recursive_parser_ptr = full_parser;
-
-  return *recursive_parser_ptr;
+    return Parser<T>([parser_ptr](std::string_view input) {
+        // Copies shared_ptr by value which then holds the reference.
+        return (*parser_ptr)(input);
+    });
 }
 
 #endif  // __PARSER_H__
