@@ -121,6 +121,7 @@ TEST(ParserTest, ParseNumber) {
   auto integer = parsers::number();
 
   EXPECT_EQ(integer("0").value(), 0);
+  EXPECT_EQ(integer("1").value(), 1);
   EXPECT_EQ(integer("123").value(), 123);
   EXPECT_EQ(integer("-123").value(), -123);
   EXPECT_FALSE(integer("01"));
@@ -269,4 +270,48 @@ TEST(ParserTest, Spacing) {
   EXPECT_TRUE(result.value().top.value == 10);
   EXPECT_TRUE(result.value().right.value == 22);
   EXPECT_THAT(result.input.front(), Eq(';'));
+}
+
+TEST(ParserTest, RecursiveParser) {
+  Parser<int> parse_term = parse_recursive<int>([](Parser<int> const& term) {
+    return parsers::number().or_else(
+        parse_literal('(').and_then(parse_ref(term)).skip(parse_literal(')')));
+  });
+
+  EXPECT_TRUE(parse_term("1"));
+  EXPECT_THAT(parse_term("(20)").value(), Eq(20));
+}
+
+TEST(ParserTest, Expression) {
+  // expr ::= term + expr | term - expr | term
+  // term ::= factor * term | factor / term | factor
+  // factor ::= (expression) | number
+
+  Parser<int> parse_expr = parse_recursive<int>([](Parser<int> const& expr) {
+    Parser<int> parse_factor =
+        parsers::number().or_else(
+            parse_literal('(').and_then(parse_ref(expr)).skip(parse_literal(')'))
+        );
+
+    Parser<int> parse_term = parse_recursive<int>([=](Parser<int> const& term) {
+      return parse_factor.skip(parse_literal('*'))
+          .and_then([&term](int lhs) {
+            return parse_ref(term).transform(
+                [lhs](int rhs) { return lhs * rhs; });
+          })
+          .or_else(parse_factor);
+    });
+
+    return parse_term.skip(parse_literal('+'))
+        .and_then([&expr](int lhs) {
+          return parse_ref(expr).transform([lhs](int rhs) { return lhs + rhs; });
+        })
+        .or_else(parse_term);
+  });
+
+  EXPECT_THAT(parse_expr("1+2").value(), Eq(3));
+  EXPECT_THAT(parse_expr("2*8").value(), Eq(16));
+  EXPECT_THAT(parse_expr("1+2*8").value(), Eq(17));
+  EXPECT_THAT(parse_expr("(1+2)*8").value(), Eq(24));
+  EXPECT_THAT(parse_expr("(1+2)*(5+3)").value(), Eq(24));
 }
