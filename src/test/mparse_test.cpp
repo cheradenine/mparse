@@ -6,6 +6,39 @@
 using ::testing::ElementsAre;
 using ::testing::Eq;
 
+namespace {
+template <typename T>
+std::ostream& dump_vec(std::ostream& out, const std::vector<T>& values) {
+  out << "[";
+  for (auto it = values.begin(); it != values.end(); ++it) {
+    out << *it;
+    if ((it + 1) != values.end()) {
+      out << ",";
+    }
+  }
+  out << "]";
+
+  return out;
+}
+
+template <class T>
+std::ostream& dump_map(std::ostream& out,
+                       const std::unordered_map<std::string, T>& values) {
+  out << '{';
+  size_t count = values.size();
+  size_t idx = 0;
+  for (auto it = values.begin(); it != values.end(); ++it, ++idx) {
+    auto& [name, value] = *it;
+    out << '"' << name << "\":" << value;
+    if ((idx + 1) != count) {
+      out << ',';
+    }
+  }
+  out << '}';
+  return out;
+}
+}  // namespace
+
 namespace parsers {
 auto hexit = parse_range('A', 'F')
                  .or_else(parse_range('a', 'f'))
@@ -241,7 +274,7 @@ TEST(ParserTest, Spacing) {
 
   auto spacing =
       parse_delimited_by(dimension_parser, parse_ws(), parse_literal(';'))
-          .transform([](std::vector<Dimension> const& values) -> Spacing {
+          .transform([](const std::vector<Dimension>& values) -> Spacing {
             Spacing sp;
             switch (values.size()) {
               case 1:
@@ -273,7 +306,7 @@ TEST(ParserTest, Spacing) {
 }
 
 TEST(ParserTest, RecursiveParser) {
-  Parser<int> parse_term = parse_recursive<int>([](Parser<int> const& term) {
+  Parser<int> parse_term = parse_recursive<int>([](const Parser<int>& term) {
     return parsers::number().or_else(
         parse_literal('(').and_then(parse_ref(term)).skip(parse_literal(')')));
   });
@@ -287,13 +320,11 @@ TEST(ParserTest, Expression) {
   // term ::= factor * term | factor / term | factor
   // factor ::= (expression) | number
 
-  Parser<int> parse_expr = parse_recursive<int>([](Parser<int> const& expr) {
-    Parser<int> parse_factor =
-        parsers::number().or_else(
-            parse_literal('(').and_then(parse_ref(expr)).skip(parse_literal(')'))
-        );
+  Parser<int> parse_expr = parse_recursive<int>([](const Parser<int>& expr) {
+    Parser<int> parse_factor = parsers::number().or_else(
+        parse_literal('(').and_then(parse_ref(expr)).skip(parse_literal(')')));
 
-    Parser<int> parse_term = parse_recursive<int>([=](Parser<int> const& term) {
+    Parser<int> parse_term = parse_recursive<int>([=](const Parser<int>& term) {
       return parse_factor.skip(parse_literal('*'))
           .and_then([&term](int lhs) {
             return parse_ref(term).transform(
@@ -304,7 +335,8 @@ TEST(ParserTest, Expression) {
 
     return parse_term.skip(parse_literal('+'))
         .and_then([&expr](int lhs) {
-          return parse_ref(expr).transform([lhs](int rhs) { return lhs + rhs; });
+          return parse_ref(expr).transform(
+              [lhs](int rhs) { return lhs + rhs; });
         })
         .or_else(parse_term);
   });
@@ -314,4 +346,114 @@ TEST(ParserTest, Expression) {
   EXPECT_THAT(parse_expr("1+2*8").value(), Eq(17));
   EXPECT_THAT(parse_expr("(1+2)*8").value(), Eq(24));
   EXPECT_THAT(parse_expr("(1+2)*(5+3)").value(), Eq(24));
+}
+
+struct Json {
+  std::variant<int, std::string, bool, std::vector<Json>,
+               std::unordered_map<std::string, Json>>
+      value;
+};
+
+std::ostream& operator<<(std::ostream& out, const std::vector<Json>& vec) {
+  return dump_vec(out, vec);
+}
+
+std::ostream& operator<<(std::ostream& out,
+                         const std::unordered_map<std::string, Json>& map) {
+  return dump_map(out, map);
+}
+
+std::ostream& operator<<(std::ostream& out, const Json& js) {
+  std::visit([&out](auto&& arg) { out << arg; }, js.value);
+  return out;
+}
+
+template <class T>
+Json make_json_value(const T& val) {
+  return Json{.value = val};
+}
+
+TEST(ParserTest, ParseJson) {
+  //    <json> ::= <primitive> | <container>
+  //    <primitive> ::= <number> | <string> | <boolean>
+  //    <container> ::= <object> | <array>
+  //    <array> ::= '[' [ <json> *(', ' <json>) ] ']' ; A sequence of JSON
+  //    values separated by commas <object> ::= '{' [ <member> *(', ' <member>)
+  //    ] '}' ; A sequence of 'members' <member> ::= <string> ': ' <json> ; A
+  //    pair consisting of a name, and a JSON value
+  auto quote = parse_literal('"');
+  auto open_curly = parse_ignoring_ws(parse_literal('{'));
+  auto close_curly = parse_ignoring_ws(parse_literal('}'));
+  auto open_square = parse_ignoring_ws(parse_literal('['));
+  auto close_square = parse_ignoring_ws(parse_literal(']'));
+  auto comma = parse_ignoring_ws(parse_literal(','));
+  auto colon = parse_ignoring_ws(parse_literal(':'));
+
+  auto number = parsers::number();
+  auto string = quote.and_then(parse_some(parse_not(quote))).skip(quote);
+
+  auto boolean =
+      parse_str("true").as(true).or_else(parse_str("false").as(false));
+
+  auto primitive = number.transform(make_json_value<int>)
+                       .or_else(string
+                                    .transform([](std::string_view val) {
+                                      return std::string(val);
+                                    })
+                                    .transform(make_json_value<std::string>))
+                       .or_else(boolean.transform(make_json_value<bool>));
+
+  auto parser = parse_recursive<Json>([=](const Parser<Json>& json) {
+    auto member = string.skip(colon).and_then([&json](std::string_view name) {
+      return parse_ref(json).transform([name](const Json& val) {
+        return make_pair(std::string(name), val);
+      });
+    });
+
+    auto obj = open_curly.and_then([=](auto _) {
+      return parse_delimited_by(member, comma, close_curly)
+          .skip(close_curly)
+          .transform(
+              [](const std::vector<std::pair<std::string, Json>>& members) {
+                std::unordered_map<std::string, Json> value(members.begin(),
+                                                            members.end());
+                return make_json_value(value);
+              });
+    });
+
+    auto list = open_square.and_then([=, &json](auto _) {
+      return parse_delimited_by(parse_ref(json), comma, close_square)
+          .skip(close_square)
+          .transform(make_json_value<std::vector<Json>>);
+    });
+
+    return obj.or_else(list).or_else(primitive);
+  });
+
+  EXPECT_TRUE(parser("100"));
+  EXPECT_TRUE(parser("true"));
+  EXPECT_TRUE(parser("\"a string\""));
+  EXPECT_TRUE(parser("[1,2,3]"));
+
+  auto result = parser(R"(
+  {
+    "x": {
+        "name": "Fred",
+        "age": 99
+    },
+    "y": [1, 2, 3, true, { "a": "bc" }],
+    "z": {
+        "email":"somebody@examle.com",
+        "phone": "(123) - 456 - 7890",
+        "json": true
+    }
+  }
+  )");
+
+  EXPECT_TRUE(result.has_value());
+  if (result.has_value()) {
+    std::cout << result.value() << std::endl;
+  } else {
+    std::cout << result.error << std::endl;
+  }
 }

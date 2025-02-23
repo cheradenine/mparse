@@ -2,6 +2,7 @@
 #define __PARSER_H__
 
 #include <fmt/format.h>
+#include <assert.h>
 #include <functional>
 #include <iostream>
 #include <memory>
@@ -10,7 +11,6 @@
 #include <string_view>
 #include <variant>
 #include <vector>
-#include <assert.h>
 
 using unit = std::monostate;
 
@@ -27,7 +27,7 @@ struct ParseResult {
   bool operator!() const { return !result.has_value(); }
   bool has_value() const { return result.has_value(); }
   T& value() { return *result; }
-  T const& value() const { return *result; }
+  const T& value() const { return *result; }
 };
 
 // Helper functions for constructing ParseResults
@@ -38,7 +38,7 @@ ParseResult<T> make_parse_result(T value, std::string_view remaining) {
 
 template <typename T>
 ParseResult<T> empty_parse_result(std::string_view input,
-                                  std::string const& error) {
+                                  const std::string& error) {
   return ParseResult<T>{.result = std::nullopt, .input = input, .error = error};
 }
 
@@ -46,7 +46,7 @@ namespace detail {
 template <typename T>
 struct parser_impl {
   template <typename U>
-  static auto skip(Parser<T> const& parser, Parser<U> const& next) {
+  static auto skip(const Parser<T>& parser, const Parser<U>& next) {
     return Parser<T>([parser, next](std::string_view input) {
       auto result = parser(input);
       if (!result) {
@@ -63,9 +63,9 @@ struct parser_impl {
 
 struct discontinuous_tag {};
 struct discontinuous_string_view : std::string_view, discontinuous_tag {
-  discontinuous_string_view(std::string_view const& other)
+  discontinuous_string_view(const std::string_view& other)
       : std::string_view(other) {}
-  discontinuous_string_view& operator=(std::string_view const& other) {
+  discontinuous_string_view& operator=(const std::string_view& other) {
     std::string_view::operator=(other);
     return *this;
   }
@@ -77,7 +77,7 @@ using result_vector_t =
                        std::vector<discontinuous_string_view>, std::vector<T>>;
 
 template <class T>
-std::vector<T> append(T const& item, std::vector<T>& vec) {
+std::vector<T> append(const T& item, std::vector<T>& vec) {
   vec.push_back(item);
   return vec;
 }
@@ -88,7 +88,7 @@ std::string_view append(std::string_view item, std::string_view sv) {
 }
 
 template <class T>
-std::ostream& operator<<(std::ostream& out, std::vector<T> const& xs) {
+std::ostream& operator<<(std::ostream& out, const std::vector<T>& xs) {
   out << "[";
   for (auto it = xs.begin(); it != xs.end(); ++it) {
     out << *it;
@@ -100,13 +100,13 @@ std::ostream& operator<<(std::ostream& out, std::vector<T> const& xs) {
   return out;
 }
 
-std::ostream& operator<<(std::ostream& out, unit const _) {
+std::ostream& operator<<(std::ostream& out, const unit _) {
   out << "unit";
   return out;
 }
 
 template <class T>
-std::ostream& operator<<(std::ostream& out, ParseResult<T> const& res) {
+std::ostream& operator<<(std::ostream& out, const ParseResult<T>& res) {
   if (res) {
     out << res.value();
   } else {
@@ -158,7 +158,7 @@ class Parser {
   }
 
   template <typename U>
-  auto and_then(Parser<U> const& next) const {
+  auto and_then(const Parser<U>& next) const {
     Parser self = parse_;
     return Parser<U>([self, next](std::string_view input) {
       auto result = self(input);
@@ -170,7 +170,7 @@ class Parser {
   }
 
   template <typename U>
-  Parser<T> and_not(Parser<U> const& next) const {
+  Parser<T> and_not(const Parser<U>& next) const {
     Parser self = parse_;
     return Parser<T>([self, next](std::string_view input) {
       auto result = self(input);
@@ -188,7 +188,7 @@ class Parser {
   }
 
   template <typename U>
-  auto skip(Parser<U> const& next) const {
+  auto skip(const Parser<U>& next) const {
     return detail::parser_impl<T>::skip(*this, next);
   }
 
@@ -221,7 +221,7 @@ template <>
 struct parser_impl<std::string_view> {
   // When skipping over input the result becomes discontinuous
   template <typename U>
-  static auto skip(StringParser const& parser, Parser<U> const& next) {
+  static auto skip(const StringParser& parser, const Parser<U>& next) {
     Parser<detail::discontinuous_string_view> to_dc = parser.transform(
         [](auto value) { return detail::discontinuous_string_view(value); });
     return to_dc.skip(next);
@@ -248,6 +248,19 @@ Parser<T> pure(T value) {
   return Parser<T>([value](std::string_view input) {
     return make_parse_result(
         value, input);  // Succeeds with value, doesn't consume input
+  });
+}
+
+template <typename T>
+Parser<T> parse_not(Parser<T> parser) {
+  return Parser<T>([parser](std::string_view input) {
+    auto result = parser(input);
+    if (result) {
+      return empty_parse_result<T>(input, "Error: not");
+    } else {
+      return make_parse_result<std::string_view>(input.substr(0, 1),
+                                                 input.substr(1));
+    }
   });
 }
 
@@ -356,7 +369,7 @@ Parser<std::vector<T>> parse_some(Parser<T> parser,
 template <typename T>
 Parser<std::vector<T>> parse_n(Parser<T> parser, size_t min,
                                std::optional<size_t> max = std::nullopt) {
-  return parse_some(parser, max).and_then([min](auto const& results) {
+  return parse_some(parser, max).and_then([min](const auto& results) {
     if (results.size() < min) {
       return parse_never<std::vector<T>>();
     }
@@ -512,22 +525,21 @@ Parser<detail::discontinuous_string_view> parse_ignoring_ws(
 
 // this is unsafe - the referencing parser must
 // out live calls to this parser.
-template<typename T>
+template <typename T>
 Parser<T> parse_ref(const Parser<T>& parser) {
-    return Parser<T>([&] (std::string_view input) {
-        return parser(input);
-    });
+  return Parser<T>([&](std::string_view input) { return parser(input); });
 }
 
-template<typename T>
-Parser<T> parse_recursive(std::function<Parser<T>(const Parser<T>&)> make_parser) {
-    auto parser_ptr = std::make_shared<Parser<T>>(parse_never<T>());
-    *parser_ptr = make_parser(*parser_ptr);
+template <typename T>
+Parser<T> parse_recursive(
+    std::function<Parser<T>(const Parser<T>&)> make_parser) {
+  auto parser_ptr = std::make_shared<Parser<T>>(parse_never<T>());
+  *parser_ptr = make_parser(*parser_ptr);
 
-    return Parser<T>([parser_ptr](std::string_view input) {
-        // Copies shared_ptr by value which then holds the reference.
-        return (*parser_ptr)(input);
-    });
+  return Parser<T>([parser_ptr](std::string_view input) {
+    // Copies shared_ptr by value which then holds the reference.
+    return (*parser_ptr)(input);
+  });
 }
 
 #endif  // __PARSER_H__
