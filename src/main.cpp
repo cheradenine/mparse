@@ -1,5 +1,6 @@
 #include "parser.h"
 #include "style_sheet.h"
+#include "util.h"
 #include <charconv>
 #include <cstdarg>
 #include <fstream>
@@ -15,18 +16,6 @@
 // A parser for things
 // is a function from strings
 // to lists of pairs of strings and things.
-
-template <typename T>
-void dump_result(std::vector<T> const& res) {
-  std::cout << "[";
-  for (auto it = res.begin(); it != res.end(); ++it) {
-    std::cout << *it;
-    if ((it + 1) != res.end()) {
-      std::cout << ",";
-    }
-  }
-  std::cout << "]";
-}
 
 Parser<int> parse_number() {
   auto positive_number = parse_digit(1, 9).and_then([](int val) {
@@ -62,7 +51,7 @@ Parser<Dimension> parse_dimension() {
 Parser<Spacing> parse_spacing() {
   auto spacing =
       parse_delimited_by(parse_dimension(), parse_ws(), parse_literal(';'))
-          .transform([](std::vector<Dimension> const& values) -> Spacing {
+          .transform([](const std::vector<Dimension>& values) -> Spacing {
             Spacing sp;
             switch (values.size()) {
               case 1:
@@ -95,7 +84,7 @@ int decode_hex_str(std::string_view str) {
   return (uint8_t)(std::strtoul(buf, nullptr, 16));
 }
 
-int combine_digits(std::vector<int> const digits) {
+int combine_digits(const std::vector<int> digits) {
   int val = 0;
   for (auto d : digits) {
     val = (val * 10) + d;
@@ -150,30 +139,30 @@ Parser<Color> parse_color() {
 
 template <typename T>
 Parser<Rule> parse_rule(std::string_view property, Parser<T> rule_value) {
-  return rule_value().transform([property](T const& value) {
+  return rule_value().transform([property](const T& value) {
     return Rule{.property = std::string(property), .value = value};
   });
 }
 
 Parser<Rule> parse_dimension_rule(std::string_view property) {
-  return parse_dimension().transform([property](Dimension const& dim) {
+  return parse_dimension().transform([property](const Dimension& dim) {
     return Rule{.property = std::string(property), .value = dim};
   });
 }
 
 Parser<Rule> parse_color_rule(std::string_view property) {
-  return parse_color().transform([property](Color const& color) {
+  return parse_color().transform([property](const Color& color) {
     return Rule{.property = std::string(property), .value = color};
   });
 }
 
 Parser<Rule> parse_spacing_rule(std::string_view property) {
-  return parse_spacing().transform([property](Spacing const& spacing) {
+  return parse_spacing().transform([property](const Spacing& spacing) {
     return Rule{.property = std::string(property), .value = spacing};
   });
 }
 
-void print_stylesheet(StyleSheet const& ss) {
+void print_stylesheet(const StyleSheet& ss) {
   for (auto it = ss.selectors.begin(); it != ss.selectors.end(); ++it) {
     std::cout << it->first << ":" << std::endl;
     for (auto rule : it->second) {
@@ -213,7 +202,7 @@ void ParseStyleSheet(std::string_view input) {
                       .skip(parse_opt_ws())
                       .and_then([rule](std::string_view sel_name) {
                         return parse_some(rule).transform(
-                            [sel_name](std::vector<Rule> const& rules) {
+                            [sel_name](const std::vector<Rule>& rules) {
                               return make_pair(sel_name, rules);
                             });
                       })
