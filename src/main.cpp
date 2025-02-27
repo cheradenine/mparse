@@ -123,7 +123,7 @@ Parser<Color> parse_color() {
                          .b = decode_hex_str(value.substr(4, 6))};
           });
 
-  auto delimiter = parse_ignoring_ws(parse_literal(','));
+  auto delimiter = parse_literal(',').trim();
   auto rgb_parser =
       parse_str("rgb")
           .skip(parse_opt_ws())
