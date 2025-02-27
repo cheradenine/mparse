@@ -55,3 +55,6 @@ existing parsers.
 
 Input now is assumed to be in a single buffer and accessed via string_view. It is a great abstraction for hadling parsing but input will likely need to be enhanced to handler large input streams.
 
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
