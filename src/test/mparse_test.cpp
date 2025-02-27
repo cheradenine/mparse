@@ -90,11 +90,11 @@ TEST(ParserTest, ParseStringTest) {
 TEST(ParserTest, ParseHelloWorld) {
   auto parser = parse_str("hello")
                     .skip(parse_opt_ws())
-                    .and_then(parse_str(","))
+                    .and_then(parse_literal(','))
                     .skip(parse_opt_ws())
                     .and_then(parse_str("world"));
 
-  auto result = parser("hello, world");
+  auto result = parser("hello   , world");
   assert(result.value() == "world");
 
   EXPECT_THAT(result.value(), Eq("world"));
@@ -159,6 +159,22 @@ TEST(ParserTest, ParseNumber) {
   EXPECT_EQ(integer("-123").value(), -123);
   EXPECT_FALSE(integer("01"));
   EXPECT_FALSE(integer("-0"));
+}
+
+TEST(ParserTest, Optional) {
+  auto opt_parser = parse_literal('*');
+  auto parser =
+      parse_str("v").and_then(parse_opt(opt_parser)).and_then(parse_str("w"));
+  EXPECT_TRUE(parser("v*w"));
+  EXPECT_TRUE(parser("vw"));
+}
+
+TEST(ParserTest, Trim) {
+  auto parser = parse_str("hello").trim().skip(parse_end());
+  EXPECT_TRUE(parser("hello"));
+  EXPECT_TRUE(parser("  hello"));
+  EXPECT_TRUE(parser("hello  "));
+  EXPECT_TRUE(parser("  hello  "));
 }
 
 TEST(ParserTest, DelimitedBy) {
@@ -382,12 +398,12 @@ TEST(ParserTest, ParseJson) {
   //    ] '}' ; A sequence of 'members' <member> ::= <string> ': ' <json> ; A
   //    pair consisting of a name, and a JSON value
   auto quote = parse_literal('"');
-  auto open_curly = parse_ignoring_ws(parse_literal('{'));
-  auto close_curly = parse_ignoring_ws(parse_literal('}'));
-  auto open_square = parse_ignoring_ws(parse_literal('['));
-  auto close_square = parse_ignoring_ws(parse_literal(']'));
-  auto comma = parse_ignoring_ws(parse_literal(','));
-  auto colon = parse_ignoring_ws(parse_literal(':'));
+  auto open_curly = parse_literal('{').trim();
+  auto close_curly = parse_literal('}').trim();
+  auto open_square = parse_literal('[').trim();
+  auto close_square = parse_literal(']').trim();
+  auto comma = parse_literal(',').trim();
+  auto colon = parse_literal(':').trim();
 
   auto number = parsers::number();
   auto string = quote.and_then(parse_some(parse_not(quote))).skip(quote);
@@ -403,32 +419,34 @@ TEST(ParserTest, ParseJson) {
                                     .transform(make_json_value<std::string>))
                        .or_else(boolean.transform(make_json_value<bool>));
 
-  auto parser = parse_recursive<Json>([=](const Parser<Json>& json) {
-    auto member = string.skip(colon).and_then([&json](std::string_view name) {
-      return parse_ref(json).transform([name](const Json& val) {
-        return make_pair(std::string(name), val);
-      });
-    });
-
-    auto obj = open_curly.and_then([=](auto _) {
-      return parse_delimited_by(member, comma, close_curly)
-          .skip(close_curly)
-          .transform(
-              [](const std::vector<std::pair<std::string, Json>>& members) {
-                std::unordered_map<std::string, Json> value(members.begin(),
-                                                            members.end());
-                return make_json_value(value);
+  auto parser =
+      parse_recursive<Json>([=](const Parser<Json>& json) {
+        auto member =
+            string.skip(colon).and_then([&json](std::string_view name) {
+              return parse_ref(json).transform([name](const Json& val) {
+                return make_pair(std::string(name), val);
               });
-    });
+            });
 
-    auto list = open_square.and_then([=, &json](auto _) {
-      return parse_delimited_by(parse_ref(json), comma, close_square)
-          .skip(close_square)
-          .transform(make_json_value<std::vector<Json>>);
-    });
+        auto obj = open_curly.and_then([=](auto _) {
+          return parse_delimited_by(member, comma, close_curly)
+              .skip(close_curly)
+              .transform(
+                  [](const std::vector<std::pair<std::string, Json>>& members) {
+                    std::unordered_map<std::string, Json> value(members.begin(),
+                                                                members.end());
+                    return make_json_value(value);
+                  });
+        });
 
-    return obj.or_else(list).or_else(primitive);
-  });
+        auto list = open_square.and_then([=, &json](auto _) {
+          return parse_delimited_by(parse_ref(json), comma, close_square)
+              .skip(close_square)
+              .transform(make_json_value<std::vector<Json>>);
+        });
+
+        return obj.or_else(list).or_else(primitive);
+      }).skip(parse_end());
 
   EXPECT_TRUE(parser("100"));
   EXPECT_TRUE(parser("true"));

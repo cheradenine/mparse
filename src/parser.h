@@ -1,3 +1,25 @@
+//
+// Copyright 2025 John R. Burkhardt
+// 
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the “Software”), to 
+// deal in the Software without restriction, including without limitation the
+// rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
+// sell copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+// FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+// IN THE SOFTWARE.
+//
+
 #ifndef __PARSER_H__
 #define __PARSER_H__
 
@@ -116,6 +138,13 @@ std::ostream& operator<<(std::ostream& out, const ParseResult<T>& res) {
 }
 }  // namespace detail
 
+// Some declarations needed inside the Parser class implementation.
+template <class T>
+class Parser;
+
+Parser<unit> parse_opt_ws();
+Parser<unit> parse_ws();
+
 template <class T>
 class Parser {
  public:
@@ -210,6 +239,8 @@ class Parser {
     return transform([value](auto&&) -> U { return value; });
   }
 
+  auto trim() { return parse_opt_ws().and_then(*this).skip(parse_opt_ws()); }
+
  private:
   Parse parse_;
 };
@@ -244,7 +275,7 @@ Parser<T> parse_never() {
 }
 
 template <typename T>
-Parser<T> pure(T value) {
+Parser<T> pure(const T& value) {
   return Parser<T>([value](std::string_view input) {
     return make_parse_result(
         value, input);  // Succeeds with value, doesn't consume input
@@ -333,6 +364,26 @@ StringParser parse_any_of(std::string_view str) {
   });
 }
 
+StringParser parse_none_of(std::string_view str) {
+  return StringParser([str](std::string_view input) {
+    if (detail::str_contains(str, input.front())) {
+      return empty_parse_result<std::string_view>(
+          input, fmt::format("Error: expected none of {} but saw {}", str,
+                             input.front()));
+    }
+    return make_parse_result(input.substr(0, 1), input.substr(1));
+  });
+}
+
+StringParser parse_any() {
+  return StringParser([](std::string_view input) {
+    if (input.empty()) {
+      return empty_parse_result<std::string_view>(input, "Error: empty input");
+    }
+    return make_parse_result(input.substr(0, 1), input.substr(1));
+  });
+}
+
 Parser<int> parse_digit(int first = 0, int last = 9) {
   auto is_valid_digit = [first, last](int ch) -> int {
     int val = ch - '0';
@@ -344,9 +395,21 @@ Parser<int> parse_digit(int first = 0, int last = 9) {
       });
 }
 
+template <typename T>
+Parser<std::optional<T>> parse_opt(Parser<T> parser) {
+  return Parser<std::optional<T>>([parser](std::string_view input) {
+    auto result = parser(input);
+    if (result) {
+      return make_parse_result(std::optional<T>(result.value()), result.input);
+    } else {
+      return make_parse_result<std::optional<T>>(std::nullopt, input);
+    }
+  });
+}
+
 // Zero or more.
 template <typename T>
-Parser<std::vector<T>> parse_some(Parser<T> parser,
+Parser<std::vector<T>> parse_some(const Parser<T>& parser,
                                   std::optional<size_t> max = std::nullopt) {
   return Parser<std::vector<T>>([parser, max](std::string_view input) {
     std::vector<T> results;
@@ -367,7 +430,7 @@ Parser<std::vector<T>> parse_some(Parser<T> parser,
 }
 
 template <typename T>
-Parser<std::vector<T>> parse_n(Parser<T> parser, size_t min,
+Parser<std::vector<T>> parse_n(const Parser<T>& parser, size_t min,
                                std::optional<size_t> max = std::nullopt) {
   return parse_some(parser, max).and_then([min](const auto& results) {
     if (results.size() < min) {
@@ -377,7 +440,7 @@ Parser<std::vector<T>> parse_n(Parser<T> parser, size_t min,
   });
 }
 
-StringParser parse_some(StringParser parser,
+StringParser parse_some(const StringParser& parser,
                         std::optional<size_t> max = std::nullopt) {
   return StringParser([parser, max](std::string_view input) {
     size_t size = 0;
@@ -400,7 +463,7 @@ StringParser parse_some(StringParser parser,
   });
 }
 
-StringParser parse_n(StringParser parser, size_t min,
+StringParser parse_n(const StringParser& parser, size_t min,
                      std::optional<int> max = std::nullopt) {
   // This version can't use the same combinator as above because of the
   // continuous string_view optiization.
@@ -437,6 +500,15 @@ StringParser parse_n(StringParser parser, size_t min,
   });
 }
 
+Parser<unit> parse_end() {
+  return Parser<unit>([](std::string_view input) {
+    if (!input.empty()) {
+      return empty_parse_result<unit>(input, "Error: input not empty");
+    }
+    return make_parse_result(unit{}, input);
+  });
+}
+
 StringParser parse_sequence(std::initializer_list<StringParser> parsers) {
   std::vector<StringParser> ps(parsers);
   return StringParser([ps](std::string_view input) {
@@ -461,8 +533,8 @@ StringParser parse_sequence(std::initializer_list<StringParser> parsers) {
 
 template <typename T, typename D, typename S>
 Parser<detail::result_vector_t<T>> parse_delimited_by(
-    Parser<T> parser, Parser<D> delimiter, Parser<S> terminator,
-    std::optional<int> max = std::nullopt) {
+    const Parser<T>& parser, const Parser<D>& delimiter,
+    const Parser<S>& terminator, std::optional<int> max = std::nullopt) {
   using ResultType = detail::result_vector_t<T>;
   return Parser<ResultType>([=](std::string_view input) {
     auto tokens_result = parse_some(parser.skip(delimiter))(input);
@@ -508,23 +580,21 @@ Parser<unit> parse_opt_ws() { return parse_some(parse_space()).as(unit{}); }
 Parser<unit> parse_ws() { return parse_n(parse_space(), 1).as(unit{}); }
 
 template <typename T, typename U>
-Parser<T> parse_ignoring(Parser<T> parser, Parser<U> ignore) {
+Parser<T> parse_ignoring(const Parser<T>& parser, const Parser<U>& ignore) {
   return parser.skip(ignore).or_else(ignore.and_then(parser).skip(ignore));
 }
 
 template <typename U>
-Parser<detail::discontinuous_string_view> parse_ignoring(StringParser parser,
-                                                         Parser<U> ignore) {
+Parser<detail::discontinuous_string_view> parse_ignoring(
+    const StringParser& parser, const Parser<U>& ignore) {
   return parse_ignoring(detail::to_discontinuous(parser), ignore);
 }
 
 Parser<detail::discontinuous_string_view> parse_ignoring_ws(
-    StringParser parser) {
+    const StringParser& parser) {
   return parse_ignoring(parser, parse_opt_ws());
 }
 
-// this is unsafe - the referencing parser must
-// out live calls to this parser.
 template <typename T>
 Parser<T> parse_ref(const Parser<T>& parser) {
   return Parser<T>([&](std::string_view input) { return parser(input); });
