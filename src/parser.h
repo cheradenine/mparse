@@ -590,11 +590,6 @@ Parser<detail::discontinuous_string_view> parse_ignoring(
   return parse_ignoring(detail::to_discontinuous(parser), ignore);
 }
 
-Parser<detail::discontinuous_string_view> parse_ignoring_ws(
-    const StringParser& parser) {
-  return parse_ignoring(parser, parse_opt_ws());
-}
-
 template <typename T>
 Parser<T> parse_ref(const Parser<T>& parser) {
   return Parser<T>([&](std::string_view input) { return parser(input); });

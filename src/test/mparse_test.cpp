@@ -162,9 +162,9 @@ TEST(ParserTest, ParseNumber) {
 }
 
 TEST(ParserTest, Optional) {
-  auto opt_parser = parse_literal('*');
+  auto optional_star = parse_literal('*');
   auto parser =
-      parse_str("v").and_then(parse_opt(opt_parser)).and_then(parse_str("w"));
+      parse_str("v").and_then(parse_opt(optional_star)).and_then(parse_str("w"));
   EXPECT_TRUE(parser("v*w"));
   EXPECT_TRUE(parser("vw"));
 }
@@ -190,7 +190,7 @@ TEST(ParserTest, DelimitedBy) {
 
 TEST(ParserTest, DelimitedByMultiple) {
   auto token = parse_some(parse_any_of("abcde"));
-  auto delimiter = parse_ignoring_ws(parse_literal(','));
+  auto delimiter = parse_literal(',').trim();
   auto terminator = parse_literal(';');
 
   auto parser = parse_delimited_by(token, delimiter, terminator);
@@ -235,7 +235,7 @@ TEST(ParserTest, AndNot) {
 
 TEST(ParserTest, RGB) {
   auto hex = parse_str("0x").and_then(parsers::hexbyte);
-  auto delimiter = parse_ignoring_ws(parse_literal(','));
+  auto delimiter = parse_literal(',').trim();
   auto parser =
       parse_str("rgb")
           .skip(parse_opt_ws())
