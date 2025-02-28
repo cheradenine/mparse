@@ -15,9 +15,7 @@ along the way.
     // A simple example.
 
     auto parser = parse_str("hello")
-        .skip(parse_opt_ws())
-        .and_then(parse_literal(','))
-        .skip(parse_opt_ws())
+        .and_then(parse_literal(',').trim())
         .and_then(parse_str("world"));
 
     auto result = parser("hello, world");

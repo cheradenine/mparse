@@ -98,44 +98,8 @@ using result_vector_t =
     std::conditional_t<std::is_same_v<T, std::string_view>,
                        std::vector<discontinuous_string_view>, std::vector<T>>;
 
-template <class T>
-std::vector<T> append(const T& item, std::vector<T>& vec) {
-  vec.push_back(item);
-  return vec;
-}
 
-std::string_view append(std::string_view item, std::string_view sv) {
-  assert(sv.data() + sv.size() == item.data());
-  return std::string_view(sv.data(), sv.size() + item.size());
-}
 
-template <class T>
-std::ostream& operator<<(std::ostream& out, const std::vector<T>& xs) {
-  out << "[";
-  for (auto it = xs.begin(); it != xs.end(); ++it) {
-    out << *it;
-    if (it + 1 != xs.end()) {
-      out << ",";
-    }
-  }
-  out << "]";
-  return out;
-}
-
-std::ostream& operator<<(std::ostream& out, const unit _) {
-  out << "unit";
-  return out;
-}
-
-template <class T>
-std::ostream& operator<<(std::ostream& out, const ParseResult<T>& res) {
-  if (res) {
-    out << res.value();
-  } else {
-    out << res.error;
-  }
-  return out;
-}
 }  // namespace detail
 
 // Some declarations needed inside the Parser class implementation.

@@ -89,9 +89,7 @@ TEST(ParserTest, ParseStringTest) {
 
 TEST(ParserTest, ParseHelloWorld) {
   auto parser = parse_str("hello")
-                    .skip(parse_opt_ws())
-                    .and_then(parse_literal(','))
-                    .skip(parse_opt_ws())
+                    .and_then(parse_literal(',').trim())
                     .and_then(parse_str("world"));
 
   auto result = parser("hello   , world");
@@ -432,7 +430,7 @@ TEST(ParserTest, ParseJson) {
           return parse_delimited_by(member, comma, close_curly)
               .skip(close_curly)
               .transform(
-                  [](const std::vector<std::pair<std::string, Json>>& members) {
+                  [](const auto& members) {
                     std::unordered_map<std::string, Json> value(members.begin(),
                                                                 members.end());
                     return make_json_value(value);
