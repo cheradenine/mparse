@@ -28,6 +28,77 @@ along the way.
     assert(result.value() == "world");
 
 ```
+### Recursive parsing
+
+Sometimes you need a parser that can refer to itself to handle recursive structures. For example a JSON value
+can be a list of JSON values. A recursive parser takes a lamda that is passed a parser which becomes the parser returned by the lambda. Kind of mind bending but it works!
+
+```
+  // Example JSON parser (also see unit tests)
+
+  struct Json {
+    std::variant<int, std::string, bool, unit, std::vector<Json>,
+               std::unordered_map<std::string, Json>>
+    value;
+  };
+
+  template <class T>
+  Json make_json_value(const T& val) {
+    return Json{.value = val};
+  }
+
+  auto quote = parse_literal('"');
+  auto open_curly = parse_literal('{').trim();
+  auto close_curly = parse_literal('}').trim();
+  auto open_square = parse_literal('[').trim();
+  auto close_square = parse_literal(']').trim();
+  auto comma = parse_literal(',').trim();
+  auto colon = parse_literal(':').trim();
+
+  // Elided for brevity. See tests.
+  auto number = parsers::number();
+  auto string = quote.and_then(parse_some(parse_not(quote))).skip(quote);
+
+  auto boolean =
+      parse_str("true").as(true).or_else(parse_str("false").as(false));
+
+  auto null_ = parse_str("null").as(unit{});
+
+  auto primitive = number.transform(make_json_value<int>)
+                       .or_else(string
+                                    .transform([](std::string_view val) {
+                                      return std::string(val);
+                                    })
+                                    .transform(make_json_value<std::string>))
+                       .or_else(boolean.transform(make_json_value<bool>))
+                       .or_else(null_.transform(make_json_value<unit>));
+
+  auto parser =
+      parse_recursive<Json>([=](const Parser<Json>& json) {
+        auto member =
+            string.skip(colon).and_then([&json](std::string_view name) {
+              return parse_ref(json).transform([name](const Json& val) {
+                return make_pair(std::string(name), val);
+              });
+            });
+
+        auto obj = open_curly.and_then(
+            parse_delimited_by(member, comma, close_curly)
+                .skip(close_curly)
+                .transform([](const auto& members) {
+                  std::unordered_map<std::string, Json> value(members.begin(),
+                                                              members.end());
+                  return make_json_value(value);
+                }));
+
+        auto list = open_square.and_then(
+            parse_delimited_by(parse_ref(json), comma, close_square)
+                .skip(close_square)
+                .transform(make_json_value<std::vector<Json>>));
+
+        return obj.or_else(list).or_else(primitive);
+      }).skip(parse_end());
+```
 
 ### Handling whitespace
 
@@ -37,11 +108,9 @@ for some property values whitespace becomes an important delimiter like in paddi
 
 To deal with this the library has different ways to express parsing whitespace. Use
 
-`parse_ws()` - When failing to find whitespace would be a parse error
+`parse_ws()` - When failing to find whitespace would be a parse error.
 
 `parse_opt_ws()` - When whitespace is optional.
-
-`parse_ignoring_ws()` - to wrap a parser with optional whitespace on either end of it.
 
 ## Status
 
