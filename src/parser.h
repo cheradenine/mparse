@@ -40,7 +40,6 @@ template <class T>
 class Parser;
 template <class T>
 struct ParseResult {
-  // Maybe result should be std::expect?
   std::optional<T> result;
   std::string_view input;
   std::string error;

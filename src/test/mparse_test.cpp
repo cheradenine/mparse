@@ -161,8 +161,9 @@ TEST(ParserTest, ParseNumber) {
 
 TEST(ParserTest, Optional) {
   auto optional_star = parse_literal('*');
-  auto parser =
-      parse_str("v").and_then(parse_opt(optional_star)).and_then(parse_str("w"));
+  auto parser = parse_str("v")
+                    .and_then(parse_opt(optional_star))
+                    .and_then(parse_str("w"));
   EXPECT_TRUE(parser("v*w"));
   EXPECT_TRUE(parser("vw"));
 }
@@ -363,10 +364,15 @@ TEST(ParserTest, Expression) {
 }
 
 struct Json {
-  std::variant<int, std::string, bool, std::vector<Json>,
+  std::variant<int, std::string, bool, unit, std::vector<Json>,
                std::unordered_map<std::string, Json>>
       value;
 };
+
+std::ostream& operator<<(std::ostream& out, unit u) {
+  out << "null";
+  return out;
+}
 
 std::ostream& operator<<(std::ostream& out, const std::vector<Json>& vec) {
   return dump_vec(out, vec);
@@ -409,13 +415,16 @@ TEST(ParserTest, ParseJson) {
   auto boolean =
       parse_str("true").as(true).or_else(parse_str("false").as(false));
 
+  auto _null = parse_str("null").as(unit{});
+
   auto primitive = number.transform(make_json_value<int>)
                        .or_else(string
                                     .transform([](std::string_view val) {
                                       return std::string(val);
                                     })
                                     .transform(make_json_value<std::string>))
-                       .or_else(boolean.transform(make_json_value<bool>));
+                       .or_else(boolean.transform(make_json_value<bool>))
+                       .or_else(_null.transform(make_json_value<unit>));
 
   auto parser =
       parse_recursive<Json>([=](const Parser<Json>& json) {
@@ -426,22 +435,19 @@ TEST(ParserTest, ParseJson) {
               });
             });
 
-        auto obj = open_curly.and_then([=](auto _) {
-          return parse_delimited_by(member, comma, close_curly)
-              .skip(close_curly)
-              .transform(
-                  [](const auto& members) {
-                    std::unordered_map<std::string, Json> value(members.begin(),
-                                                                members.end());
-                    return make_json_value(value);
-                  });
-        });
+        auto obj = open_curly.and_then(
+            parse_delimited_by(member, comma, close_curly)
+                .skip(close_curly)
+                .transform([](const auto& members) {
+                  std::unordered_map<std::string, Json> value(members.begin(),
+                                                              members.end());
+                  return make_json_value(value);
+                }));
 
-        auto list = open_square.and_then([=, &json](auto _) {
-          return parse_delimited_by(parse_ref(json), comma, close_square)
-              .skip(close_square)
-              .transform(make_json_value<std::vector<Json>>);
-        });
+        auto list = open_square.and_then(
+            parse_delimited_by(parse_ref(json), comma, close_square)
+                .skip(close_square)
+                .transform(make_json_value<std::vector<Json>>));
 
         return obj.or_else(list).or_else(primitive);
       }).skip(parse_end());
@@ -461,6 +467,7 @@ TEST(ParserTest, ParseJson) {
     "z": {
         "email":"somebody@examle.com",
         "phone": "(123) - 456 - 7890",
+        "nothing": null,
         "json": true
     }
   }
